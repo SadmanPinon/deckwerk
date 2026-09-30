@@ -5,6 +5,7 @@ import { userInfo } from 'node:os';
 import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import { BrowserWindow, app, clipboard, ipcMain, screen, shell } from 'electron';
 import type { Display, IpcMainInvokeEvent, WebContents } from 'electron';
+import type { AnnotationCommand } from '@shared/annotations.js';
 import { parseDeck, type Deck } from '@shared/deck.js';
 import type { DeckHistoryDocument } from '@shared/deckHistory.js';
 import {
@@ -1057,6 +1058,15 @@ function registerHandlers(): void {
     if (!state) return;
     state.presentationState = presentation;
     state.presenter?.webContents.send(IPC.presentState, presentation);
+  });
+  // Annotations have no authority: whichever presentation window the pointer
+  // is on draws, and the other one mirrors it. So the relay runs both ways.
+  ipcMain.on(IPC.presentAnnotation, (event, command: AnnotationCommand) => {
+    const state = ownerOf(event.sender);
+    if (!state) return;
+    const fromAudience = state.present?.webContents === event.sender;
+    const target = fromAudience ? state.presenter : state.present;
+    if (target && !target.isDestroyed()) target.webContents.send(IPC.presentAnnotation, command);
   });
 
   ipcMain.handle(IPC.trimOpen, (event, payload: { src: string; elementId: string }) => {

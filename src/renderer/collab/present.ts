@@ -3,6 +3,7 @@ import '../player/type.css';
 import '../appChrome.css';
 import '../presenter/presenter.css';
 import './present.css';
+import { annotationSlideKey } from '@shared/annotations.js';
 import type { Deck } from '@shared/deck.js';
 import type { PresentationCommand, PresentationState } from '@shared/ipc.js';
 import {
@@ -11,6 +12,7 @@ import {
   type PresentationRange,
 } from '@shared/presentationRange.js';
 import type { Cursor } from '@shared/timeline.js';
+import { AnnotationLayer } from '../player/annotationLayer.js';
 import { Player } from '../player/player.js';
 import { bindPresentKeys } from '../player/keys.js';
 import { bindSpeakerKeys, createSpeakerView, type SpeakerView } from '../presenter/speakerView.js';
@@ -121,6 +123,7 @@ const speakerHost = document.getElementById('speaker')!;
 let deck: Deck | null = null;
 let themeCss = '';
 let player: Player | null = null;
+let annotations: AnnotationLayer | null = null;
 let speaker: SpeakerView | null = null;
 let unbindAudienceKeys: (() => void) | null = null;
 let unbindSpeakerKeys: (() => void) | null = null;
@@ -245,8 +248,21 @@ function mountAudience(): void {
     deck,
     container: stageHost,
     resolveSrc,
-    onCursor: publishState,
+    onCursor: (cursor, steps) => {
+      if (deck) annotations?.setSlide(annotationSlideKey(deck.slides, cursor.slide));
+      publishState(cursor, steps);
+    },
+    onBlank: (blanked) => annotations?.setHidden(blanked),
   });
+  // Pen and lasers, drawn here directly or mirrored from Speaker View. An
+  // agent viewer is a screenshot surface and never draws.
+  if (!agentViewer) {
+    annotations = new AnnotationLayer({
+      host: stageHost,
+      canvas: deck.canvas,
+      onCommand: (command) => bus?.post({ kind: 'annotation', command }),
+    });
+  }
   player.goTo({ slide: firstUnskipped(deck.slides, openAt.slide), step: openAt.step });
   readiness.painting();
   // A Speaker View opened before this surface had its deck is sitting blank;
@@ -258,6 +274,7 @@ function mountAudience(): void {
   if (connectionNotice.state() === 'disconnected') connectionNotice.showDisconnected();
   if (agentViewer) return;
   unbindAudienceKeys = bindPresentKeys(window, player, {
+    intercept: (event) => annotations?.handleKey(event) ?? false,
     onExit: exitPresentation,
     onNext: advance,
     onPrev: retreat,
@@ -270,6 +287,8 @@ function mountAudience(): void {
 function unmountAudience(): void {
   unbindAudienceKeys?.();
   unbindAudienceKeys = null;
+  annotations?.destroy();
+  annotations = null;
   player?.destroy();
   player = null;
   stageHost.replaceChildren();
@@ -280,12 +299,15 @@ function unmountAudience(): void {
 window.addEventListener('click', (event) => {
   if (consumeFullscreenGesture()) return;
   if (role !== 'audience' || agentViewer) return;
+  // The pen and the laser trail own the button while they are picked.
+  if (annotations?.capturesPointer()) return;
   if (slideLinkFromEvent(event) || eventOnInteractiveWeb(event)) return;
   if (selectionPreventsAdvance()) return;
   advance();
 });
 window.addEventListener('dblclick', () => {
   if (role !== 'audience' || agentViewer) return;
+  if (annotations?.capturesPointer()) return;
   if (embedded) exitPresentation();
   else if (document.fullscreenElement) void document.exitFullscreen();
   else void document.documentElement.requestFullscreen();
@@ -312,11 +334,16 @@ function mountSpeaker(): void {
     // surface plays which role instead of moving either of them.
     swapLabel: 'Switch views',
     swapTitle: 'Swap which window shows the audience and which shows Speaker View',
+    onAnnotation: (command) => bus?.post({ kind: 'annotation', command }),
   });
   if (themeCss) speaker.setTheme(themeCss);
   if (deck) speaker.setDeck(deck);
   speaker.setState(lastState);
-  unbindSpeakerKeys = bindSpeakerKeys(window, sendCommand);
+  unbindSpeakerKeys = bindSpeakerKeys(
+    window,
+    sendCommand,
+    (event) => speaker?.handleAnnotationKey(event) ?? false,
+  );
   retitle();
   // Announce, so an audience surface that is already running answers with the
   // deck and the live cursor rather than leaving this one blank until the next
@@ -421,6 +448,12 @@ bus?.subscribe((message) => {
     announcedExit = true;
     if (embedded) window.parent.postMessage({ type: 'present-exit' }, location.origin);
     else window.close();
+    return;
+  }
+  if (message.kind === 'annotation') {
+    // Annotations have no owner: whichever surface drew, the other mirrors.
+    if (role === 'audience') annotations?.apply(message.command);
+    else speaker?.annotate(message.command);
     return;
   }
   // A command is the speaker's; only the audience acts on it.

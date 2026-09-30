@@ -221,6 +221,8 @@ describe('desktop Speaker View window', () => {
       onDeckState: (fn: (session: { deck: Deck }) => void) => { deckListener = fn; },
       onPresentState: (fn: (state: PresentationState) => void) => { stateListener = fn; },
       sendPresentCommand: (command: PresentationCommand) => sent.push(command),
+      sendPresentAnnotation: () => {},
+      onPresentAnnotation: () => () => {},
     });
 
     vi.resetModules();

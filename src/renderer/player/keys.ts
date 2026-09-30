@@ -5,6 +5,12 @@ import type { Player } from './player.js';
  * the keys behave identically whether or not the app is installed.
  */
 export interface KeyHandlers {
+  /**
+   * First refusal on every key, for the presenter's annotation tools. Return
+   * true when the key was handled, and the presenting map skips it — which is
+   * how Escape drops a picked pen instead of ending the show.
+   */
+  intercept?: (event: KeyboardEvent) => boolean;
   onExit?: () => void;
   onOverview?: () => void;
   onNext?: () => void;
@@ -24,6 +30,7 @@ export function bindPresentKeys(
     if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) {
       return;
     }
+    if (handlers.intercept?.(e)) return;
 
     switch (e.key) {
       case 'ArrowRight':

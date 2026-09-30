@@ -48,6 +48,8 @@ export interface PlayerOptions {
   resolveSrc: (src: string) => string;
   /** Notified on every cursor change, for slide counters and the editor rail. */
   onCursor?: (cursor: Cursor, steps: number) => void;
+  /** Notified when the screen is blanked or brought back (the `B` key). */
+  onBlank?: (blanked: boolean) => void;
 }
 
 /**
@@ -83,6 +85,7 @@ export class Player {
   private container: HTMLElement;
   private resolveSrc: (src: string) => string;
   private onCursor?: (cursor: Cursor, steps: number) => void;
+  private onBlank?: (blanked: boolean) => void;
 
   private stage: HTMLElement;
   private cursor: Cursor = { slide: 0, step: 0 };
@@ -132,6 +135,7 @@ export class Player {
     this.container = opts.container;
     this.resolveSrc = opts.resolveSrc;
     this.onCursor = opts.onCursor;
+    this.onBlank = opts.onBlank;
 
     this.container.classList.add('player-root');
     this.stage = document.createElement('div');
@@ -1148,6 +1152,7 @@ export class Player {
       const slide = this.deck.slides[this.cursor.slide];
       if (slide) this.applyState(slide, resolveState(slide, this.cursor.step));
     }
+    this.onBlank?.(this.blanked);
     return this.blanked;
   }
 

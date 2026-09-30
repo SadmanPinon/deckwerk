@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Harness — Annotations</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #141416; }
+      #audience { position: absolute; left: 0; top: 0; width: 60vw; height: 100vh; }
+      #speaker { position: absolute; right: 0; top: 0; width: 40vw; height: 100vh; }
+    </style>
+  </head>
+  <body>
+    <!--
+      Development harness: the real presenting Player with the annotation layer
+      on the left, and the real Speaker View on the right, joined by a fake
+      transport the way the desktop's IPC relay joins the two windows.
+      Query params: ?deck=decks/deckwerk_intro
+      Not part of the app.
+    -->
+    <div id="audience"></div>
+    <div id="speaker"></div>
+    <script type="module" src="./annotate-boot.ts"></script>
+  </body>
+</html>

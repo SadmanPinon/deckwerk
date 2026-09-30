@@ -18,3 +18,5 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 .preview { position: relative; min-height: 0; overflow: hidden; background: #000; box-shadow: 0 8px 30px rgb(0 0 0 / 40%); }
 .speaker-view footer { display: flex; align-items: center; justify-content: center; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
 .speaker-swap { margin-left: auto; }
+.speaker-tools { display: flex; align-items: center; gap: 6px; margin-left: 6px; padding-left: 12px; border-left: 1px solid var(--line); }
+.speaker-tool[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 24%, var(--panel-2)); color: var(--text); }

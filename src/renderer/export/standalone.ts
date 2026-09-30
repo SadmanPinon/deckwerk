@@ -1,5 +1,7 @@
 import '../player/player.css';
+import { annotationSlideKey } from '@shared/annotations.js';
 import { parseDeck } from '@shared/deck.js';
+import { AnnotationLayer } from '../player/annotationLayer.js';
 import { bindPresentKeys } from '../player/keys.js';
 import { Player } from '../player/player.js';
 import { eventOnInteractiveWeb, slideLinkFromEvent } from '../player/links.js';
@@ -32,15 +34,23 @@ function boot(): void {
   }
 
   const deck = parseDeck(window.__DECK__);
+  let annotations: AnnotationLayer | null = null;
   const player = new Player({
     deck,
     container: root,
     // Assets sit next to index.html, so their deck-relative paths already work.
     resolveSrc: (src) => src,
+    onCursor: (cursor) => annotations?.setSlide(annotationSlideKey(deck.slides, cursor.slide)),
+    onBlank: (blanked) => annotations?.setHidden(blanked),
   });
   window.__SLIDE_PLAYER__ = player;
+  // The same pen and lasers as the app. One surface here, so nothing to mirror.
+  annotations = new AnnotationLayer({ host: root, canvas: deck.canvas });
+  annotations.setSlide(annotationSlideKey(deck.slides, player.getCursor().slide));
 
-  bindPresentKeys(window, player);
+  bindPresentKeys(window, player, {
+    intercept: (event) => annotations?.handleKey(event) ?? false,
+  });
 
   // Deep-linking for humans and agents alike: index.html#7 opens slide 7.
   // With this, "render slide N" is one headless-chromium screenshot away —
@@ -54,6 +64,8 @@ function boot(): void {
 
   window.addEventListener('mousedown', (e) => {
     if (slideLinkFromEvent(e) || eventOnInteractiveWeb(e)) return;
+    // The pen and the laser trail own the primary button while picked.
+    if (e.button === 0 && annotations?.capturesPointer()) return;
     if (e.button === 0) player.next();
     else if (e.button === 2) player.prev();
   });

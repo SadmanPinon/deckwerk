@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import type { AnnotationCommand } from '@shared/annotations.js';
 import type { Deck } from '@shared/deck.js';
 import type { DeckHistoryDocument } from '@shared/deckHistory.js';
 import type { ClipboardReadResult, ClipboardWriteRequest } from '@shared/clipboard.js';
@@ -178,6 +179,10 @@ const api = {
     on(IPC.presentCommand, fn),
   onPresentState: (fn: (state: PresentationState) => void): (() => void) =>
     on(IPC.presentState, fn),
+  sendPresentAnnotation: (command: AnnotationCommand): void =>
+    ipcRenderer.send(IPC.presentAnnotation, command),
+  onPresentAnnotation: (fn: (command: AnnotationCommand) => void): (() => void) =>
+    on(IPC.presentAnnotation, fn),
 
   openTrim: (payload: { src: string; elementId: string }): Promise<void> =>
     ipcRenderer.invoke(IPC.trimOpen, payload),

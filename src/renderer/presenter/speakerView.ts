@@ -1,6 +1,13 @@
+import {
+  ANNOTATION_TOOLS,
+  annotationSlideKey,
+  type AnnotationCommand,
+  type AnnotationTool,
+} from '@shared/annotations.js';
 import type { Deck } from '@shared/deck.js';
 import type { PresentationCommand, PresentationState } from '@shared/ipc.js';
 import { resolveState } from '@shared/timeline.js';
+import { AnnotationLayer } from '../player/annotationLayer.js';
 import { revealImagesWhenDecoded } from '../player/imageDecode.js';
 import { freezePreviewVideos, releasePreviewVideos } from '../player/previewPoster.js';
 import { applyStageScale, renderSlide, rewriteCssAssetUrls } from '../player/render.js';
@@ -33,6 +40,11 @@ export interface SpeakerViewOptions {
   /** Label for the swap control, which differs between window and tab shells. */
   swapLabel?: string;
   swapTitle?: string;
+  /**
+   * Pen and laser commands drawn on the current-slide preview, for the shell to
+   * send to the audience surface. Without it the view has no annotation tools.
+   */
+  onAnnotation?: (command: AnnotationCommand) => void;
   /** Injectable clock, so timer formatting is testable without waiting. */
   now?: () => number;
 }
@@ -45,8 +57,18 @@ export interface SpeakerView {
   refresh(): void;
   /** Advance the clocks. Called on a timer internally; exposed for tests. */
   tick(): void;
+  /** Apply a pen or laser command that came from the audience surface. */
+  annotate(command: AnnotationCommand): void;
+  /** First refusal on a key for the annotation tools; true when handled. */
+  handleAnnotationKey(event: KeyboardEvent): boolean;
   destroy(): void;
 }
+
+const TOOL_LABELS: Record<AnnotationTool, { label: string; title: string }> = {
+  pen: { label: 'Pen', title: 'Draw in red on the slide (P)' },
+  laser: { label: 'Laser', title: 'Turn the pointer into a laser dot (L)' },
+  trail: { label: 'Trail', title: 'Laser that leaves a fading trail while held (T)' },
+};
 
 const MARKUP = `
   <section class="speaker-layout">
@@ -94,12 +116,56 @@ export function createSpeakerView(options: SpeakerViewOptions): SpeakerView {
   const slideTimer = pick('.speaker-slide-timer');
   const wallClock = pick('.speaker-wall-clock');
   const swap = pick<HTMLButtonElement>('.speaker-swap');
+  const footer = pick('footer');
 
   if (options.canSwapDisplays === false) {
     swap.remove();
   } else {
     if (options.swapLabel) swap.textContent = options.swapLabel;
     swap.title = options.swapTitle ?? 'Swap the audience and speaker displays';
+  }
+
+  // The presenter draws on the current-slide preview; the shell mirrors each
+  // stroke onto the audience surface, and theirs back onto this one.
+  const toolButtons = new Map<AnnotationTool, HTMLButtonElement>();
+  const reflectTool = (tool: AnnotationTool | null): void => {
+    for (const [name, button] of toolButtons) {
+      button.setAttribute('aria-pressed', String(name === tool));
+    }
+  };
+  const annotations = options.onAnnotation
+    ? new AnnotationLayer({
+      host: currentHost,
+      canvas: { w: 1920, h: 1080 },
+      onCommand: options.onAnnotation,
+      onToolChange: reflectTool,
+    })
+    : null;
+  if (annotations) {
+    const group = document.createElement('div');
+    group.className = 'speaker-tools';
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-label', 'Annotation tools');
+    for (const tool of ANNOTATION_TOOLS) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'speaker-tool';
+      button.dataset.tool = tool;
+      button.textContent = TOOL_LABELS[tool].label;
+      button.title = TOOL_LABELS[tool].title;
+      button.setAttribute('aria-pressed', 'false');
+      button.addEventListener('click', () => annotations.toggleTool(tool));
+      toolButtons.set(tool, button);
+      group.append(button);
+    }
+    const clear = document.createElement('button');
+    clear.type = 'button';
+    clear.className = 'speaker-clear-ink';
+    clear.textContent = 'Clear ink';
+    clear.title = "Erase this slide's pen strokes (E)";
+    clear.addEventListener('click', () => annotations.clearSlide());
+    group.append(clear);
+    footer.insertBefore(group, pick('.speaker-next-button').nextSibling);
   }
 
   let deck: Deck | null = null;
@@ -142,6 +208,12 @@ export function createSpeakerView(options: SpeakerViewOptions): SpeakerView {
   function render(): void {
     if (!deck) return;
     preview(currentHost, state.cursor.slide, state.cursor.step);
+    // The preview is rebuilt from scratch; put the drawing surface back over it.
+    if (annotations) {
+      annotations.attach();
+      annotations.setCanvas(deck.canvas);
+      annotations.setSlide(annotationSlideKey(deck.slides, state.cursor.slide));
+    }
     const lastSlide = state.range?.end ?? deck.slides.length - 1;
     let nextSlide = state.cursor.slide + 1;
     while (nextSlide <= lastSlide && deck.slides[nextSlide]?.skipped) nextSlide += 1;
@@ -185,8 +257,15 @@ export function createSpeakerView(options: SpeakerViewOptions): SpeakerView {
     },
     refresh: render,
     tick,
+    annotate(command) {
+      annotations?.apply(command);
+    },
+    handleAnnotationKey(event) {
+      return annotations?.handleKey(event) ?? false;
+    },
     destroy() {
       clearInterval(clock);
+      annotations?.destroy();
       theme?.remove();
       theme = null;
       host.replaceChildren();
@@ -203,8 +282,11 @@ export function createSpeakerView(options: SpeakerViewOptions): SpeakerView {
 export function bindSpeakerKeys(
   target: Window | HTMLElement,
   onCommand: (command: PresentationCommand) => void,
+  /** First refusal on each key, for the annotation tools; true when handled. */
+  intercept?: (event: KeyboardEvent) => boolean,
 ): () => void {
   const onKey = (event: Event) => {
+    if (intercept?.(event as KeyboardEvent)) return;
     const key = (event as KeyboardEvent).key;
     if (['ArrowRight', 'ArrowDown', ' ', 'PageDown', 'Enter'].includes(key)) {
       onCommand({ type: 'next' });

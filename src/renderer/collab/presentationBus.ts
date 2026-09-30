@@ -1,3 +1,4 @@
+import type { AnnotationCommand } from '@shared/annotations.js';
 import type { Deck } from '@shared/deck.js';
 import type { PresentationCommand, PresentationState } from '@shared/ipc.js';
 
@@ -28,6 +29,8 @@ export type PresentationBusMessage =
   | { kind: 'state'; state: PresentationState }
   /** Speaker → audience: a presenter control. */
   | { kind: 'command'; command: PresentationCommand }
+  /** Either way: pen and laser input, mirrored onto the other surface. */
+  | { kind: 'annotation'; command: AnnotationCommand }
   /**
    * Audience → speaker: exchange roles, handing over the whole show — where
    * it is and how long it has been running. The clocks travel with the role

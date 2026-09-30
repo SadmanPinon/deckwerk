@@ -36,6 +36,8 @@ export const IPC = {
   presentCursor: 'present:cursor',
   presentCommand: 'present:command',
   presentState: 'present:state',
+  /** Pen and laser commands, relayed between the audience window and Speaker View. */
+  presentAnnotation: 'present:annotation',
   trimOpen: 'trim:open',
   trimRun: 'trim:run',
   /** A poster frame for a preview surface, cut by ffmpeg in the main process. */
