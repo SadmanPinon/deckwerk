@@ -7,10 +7,16 @@ import type { MediaInfo, TrimRequest } from '@shared/ipc.js';
  * All ffmpeg/ffprobe use goes through here.
  *
  * Binaries are resolved in this order: the bundled per-platform binaries from
- * ffmpeg-static/ffprobe-static, then whatever is on PATH. The bundled path is
- * what makes the app work on a fresh Linux box with nothing installed; the
- * PATH fallback keeps development working if the optional dependency wasn't
- * fetched for this platform.
+ * ffmpeg-static and @ffprobe-installer/ffprobe, then whatever is on PATH. The
+ * bundled path is what makes the app work on a fresh Linux box with nothing
+ * installed; the PATH fallback keeps development working if the optional
+ * dependency wasn't fetched for this platform.
+ *
+ * ffprobe comes from @ffprobe-installer rather than ffprobe-static because
+ * ffprobe-static's "darwin/arm64" binary is an x86_64 build: on Apple silicon
+ * every probe ran under Rosetta 2, which macOS 27 flags as a component that
+ * will not open in macOS 28. @ffprobe-installer installs one native binary,
+ * for the install host only.
  */
 
 const require = createRequire(import.meta.url);
@@ -51,7 +57,7 @@ export function getFfmpegPath(): string {
 export function getFfprobePath(): string {
   if (ffprobePath === undefined) {
     ffprobePath = resolveBinary(
-      'ffprobe-static',
+      '@ffprobe-installer/ffprobe',
       (m) => (m as { path?: string })?.path,
       'ffprobe',
     );

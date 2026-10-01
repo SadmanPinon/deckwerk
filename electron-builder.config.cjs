@@ -57,7 +57,7 @@ module.exports = {
   // inside an asar archive. src/main/ffmpeg.ts rewrites the path accordingly.
   asarUnpack: [
     '**/node_modules/ffmpeg-static/**',
-    '**/node_modules/ffprobe-static/**',
+    '**/node_modules/@ffprobe-installer/**',
     '**/node_modules/libheif-js/**',
   ],
 

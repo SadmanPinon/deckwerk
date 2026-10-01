@@ -3,8 +3,8 @@
 #
 # Why a matrix of real runners rather than one cross-build: three things in
 # this tree are bound to the host that produces them.
-#   * ffmpeg-static/ffprobe-static download a binary for the *install* host at
-#     `npm ci`, and src/main/ffmpeg.ts ships whatever it finds.
+#   * ffmpeg-static/@ffprobe-installer download a binary for the *install* host
+#     at `npm ci`, and src/main/ffmpeg.ts ships whatever it finds.
 #   * The Keynote importer is a PyInstaller freeze, and PyInstaller has no
 #     cross-compilation mode — not even between macOS architectures, which is
 #     why arm64 and x64 macOS are separate entries here.

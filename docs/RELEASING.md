@@ -21,8 +21,9 @@ release and touches no channel.
 
 Nothing here can be cross-built:
 
-- `ffmpeg-static` and `ffprobe-static` fetch a binary for the *install* host
-  during `npm ci`, and `src/main/ffmpeg.ts` ships whatever it finds.
+- `ffmpeg-static` and `@ffprobe-installer/ffprobe` fetch a binary for the
+  *install* host during `npm ci`, and `src/main/ffmpeg.ts` ships whatever it
+  finds.
 - The Keynote and PowerPoint importers are PyInstaller freezes, and
   PyInstaller cannot cross-compile — not even between macOS architectures.
   Hence a `macos-15` (arm64) job and a `macos-15-intel` (x64) job rather than

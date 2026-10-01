@@ -20,8 +20,8 @@ an `.AppImage`, `.deb` and `.tar.gz` on Linux.
 `npm run dist` produces packages for **the platform and architecture you run
 it on**. There is no cross-build, and this is not a missing feature:
 
-- `ffmpeg-static` and `ffprobe-static` download a binary for the host during
-  `npm ci`, and the app ships whatever they fetched.
+- `ffmpeg-static` downloads, and `@ffprobe-installer/ffprobe` installs, a
+  binary for the host during `npm ci`, and the app ships whatever they fetched.
 - The Keynote and PowerPoint importers are PyInstaller freezes, and
   PyInstaller cannot cross-compile — not even between macOS architectures.
 
