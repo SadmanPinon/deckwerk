@@ -67,7 +67,13 @@ const EDIT_DIR = 'edit';
 const APPLY_REQUEST = /^\.deckwerk-apply\.([a-f0-9-]+)\.json$/;
 const DECK_PERSIST_DEBOUNCE_MS = 150;
 const LOCAL_CHANGE_DEBOUNCE_MS = 200;
-const HTML_SAVE_DEBOUNCE_MS = 250;
+/**
+ * How long a saved authoring page must stay unchanged before it is synced. An
+ * agent writes a page in one go, so this only has to outlast the handful of
+ * events a single save raises; it is most of the wait between a save and the
+ * edit appearing for everyone, so it is kept short.
+ */
+const HTML_SAVE_DEBOUNCE_MS = 60;
 const ECHO_TIMEOUT_MS = 15_000;
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 10_000;

@@ -746,7 +746,19 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     requestedTarget: HttpHtmlDraft['target'] | undefined,
     agentSessionParam: string | null,
     startedAt: number,
-  ): Promise<{ draft: HttpHtmlDraft; preview: HtmlDraftPreview; body: Record<string, unknown> } | { error: string }> {
+    /**
+     * Leave the built-text overflow pass to `measureOverflows` on the result,
+     * for a caller that should not wait for it: a mirror save is applied the
+     * moment its slides compile, and the overflows are only the agent's
+     * feedback. Every other caller gets them measured, as before.
+     */
+    deferOverflows = false,
+  ): Promise<{
+    draft: HttpHtmlDraft;
+    preview: HtmlDraftPreview;
+    body: Record<string, unknown>;
+    measureOverflows: () => Promise<TextOverflow[]>;
+  } | { error: string }> {
     const sanitized = await sanitizeServerHtml(html, room.session.dir);
     const sanitizedAt = Date.now();
     const temp = await mkdtemp(join(tmpdir(), 'slide-http-preview-'));
@@ -765,7 +777,10 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       const all = compiled.slides.flatMap((slide) => slide.elements);
       const fallback = all.filter((element) => element.type === 'html');
       const native = all.length - fallback.length;
-      const overflows = await measureBuiltTextOverflows(room.session.dir, room.session.deck, compiled.slides);
+      const deckAtCompile = room.session.deck;
+      const overflows = deferOverflows
+        ? []
+        : await measureBuiltTextOverflows(room.session.dir, deckAtCompile, compiled.slides);
       const overflowMeasuredAt = Date.now();
       const id = randomUUID();
       const target = requestedTarget ?? {
@@ -878,7 +893,21 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
           importedContactSheetUrl: preview.importedContactSheetUrl,
         });
       }
-      return { draft, preview, body: {
+      const measureOverflows = async (): Promise<TextOverflow[]> => {
+        if (!deferOverflows) return overflows;
+        const measuring = Date.now();
+        const measured = await measureBuiltTextOverflows(room.session.dir, deckAtCompile, compiled.slides);
+        report.overflows = measured;
+        report.timingsMs.overflowCheck = Date.now() - measuring;
+        draft.workflow = htmlDraftWorkflow({
+          overflows: measured,
+          missingAssets: sanitized.missing,
+          blockedResources: sanitized.blocked,
+          warnings: compiled.warnings,
+        });
+        return measured;
+      };
+      return { draft, preview, measureOverflows, body: {
         workflow,
         blockingIssues: workflow.blockingIssues,
         nextAction: workflow.nextAction,
@@ -1932,8 +1961,11 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       const target: HttpHtmlDraft['target'] = scope
         ? { mode: 'replace', slideIds: scope }
         : { mode: 'insert', afterSlideId: after };
-      const compiledDraft = await compileHtmlDraft(deckParam, room, html, target, agentSessionParam, startedAt);
+      // Apply as soon as the slides compile: the people watching see the edit
+      // then, and the overflow pass that follows is only the agent's feedback.
+      const compiledDraft = await compileHtmlDraft(deckParam, room, html, target, agentSessionParam, startedAt, true);
       if ('error' in compiledDraft) return respondJson(response, 400, { error: compiledDraft.error });
+      const compiledAt = Date.now();
       if (deckRevision(room.session.deck) !== compiledDraft.draft.revision) {
         return respondJson(response, 409, { error: 'the deck changed during the compile; save again' });
       }
@@ -1992,11 +2024,22 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
           agentChatId: agentChatId(deckParam, agentSessionParam) ?? undefined,
         });
       }
+      const appliedAt = Date.now();
+      // Let the broadcast reach the sockets before the overflow pass opens
+      // its window on this same thread.
+      await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+      const overflows = await compiledDraft.measureOverflows();
       respondJson(response, 200, {
         status: 'applied',
         applied: operations.length > 0,
         revision,
         changes,
+        timingsMs: {
+          compile: compiledAt - startedAt,
+          apply: appliedAt - startedAt,
+          overflowCheck: Date.now() - appliedAt,
+          total: Date.now() - startedAt,
+        },
         slides: compiledDraft.draft.slides.map((slide) => ({
           id: slide.id,
           elements: slide.elements.map((element) => ({
@@ -2004,7 +2047,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
             box: { x: element.x, y: element.y, w: element.w, h: element.h },
           })),
         })),
-        overflows: compiledDraft.draft.report.overflows ?? [],
+        overflows,
         ...(Array.isArray(compiledDraft.draft.report.warnings) && (compiledDraft.draft.report.warnings as unknown[]).length > 0
           ? { warnings: compiledDraft.draft.report.warnings }
           : {}),
