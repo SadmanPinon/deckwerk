@@ -11,7 +11,7 @@ import { runConnectCommand } from './agentConnect.js';
  * machine is Node 22 or newer.
  */
 
-const USAGE = `usage: node deckwerk-connect.mjs '<session url>' [--dir <folder>] [--agent <command>|--no-agent] [--name <text>]
+const USAGE = `usage: node deckwerk-connect.mjs '<session url>' [--dir <folder>] [--agent <command>|--no-agent] [--name <text>] [--until-disconnected]
 
 Mirrors the hosted deck the URL names into a folder on this machine and keeps it
 in sync both ways. Point your existing filesystem agent at that folder, or use
@@ -23,6 +23,7 @@ let url: string | null = null;
 let dir: string | undefined;
 let name: string | undefined;
 let agent: string | false | undefined;
+let untilDisconnected = false;
 let bad = false;
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
@@ -30,6 +31,7 @@ for (let i = 0; i < args.length; i++) {
   else if (arg === '--name') name = args[++i];
   else if (arg === '--agent') agent = args[++i];
   else if (arg === '--no-agent') agent = false;
+  else if (arg === '--until-disconnected') untilDisconnected = true;
   else if (arg === '--help' || arg === '-h') {
     process.stdout.write(USAGE);
     process.exit(0);
@@ -61,7 +63,7 @@ const io = {
 };
 
 try {
-  const code = await runConnectCommand({ url, dir, name, agent, io });
+  const code = await runConnectCommand({ url, dir, name, agent, untilDisconnected, io });
   process.exit(code);
 } catch (error) {
   io.err(error instanceof Error ? error.message : String(error));

@@ -4547,49 +4547,77 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
   min-height: 0;
 }
 
-.remote-agent-panel .agent-chat-messages {
-  min-height: 120px;
-  max-height: 280px;
+.remote-agent-light[data-light="off"]::before { background: var(--muted); }
+.remote-agent-light[data-light="opening"]::before,
+.remote-agent-light[data-light="waiting"]::before {
+  background: var(--yellow);
+  animation: remote-agent-pulse 1.2s ease-in-out infinite;
 }
+.remote-agent-light[data-light="connected"]::before {
+  background: #4ade80;
+  box-shadow: 0 0 6px rgb(74 222 128 / 70%);
+}
+.remote-agent-light[data-light="error"]::before { background: var(--danger); }
 
-.remote-agent-form {
+@keyframes remote-agent-pulse { 50% { opacity: .3; } }
+
+.remote-agent-intro {
   display: flex;
   flex: none;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px;
-  border-bottom: 1px solid var(--line);
+  gap: 12px;
+  padding: 14px;
 }
 
-.remote-agent-form[hidden] { display: none; }
+.remote-agent-intro[hidden] { display: none; }
 
-.remote-agent-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  color: var(--muted);
-  font-size: 11px;
+.remote-agent-intro p {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.55;
 }
 
-.remote-agent-field input { width: 100%; }
+.remote-agent-connect-button { align-self: flex-start; min-width: 120px; }
 
-.remote-agent-start { align-self: flex-end; margin-top: 4px; }
+.remote-agent-disconnect { flex: none; align-self: flex-start; margin: 10px 12px; }
 
-.remote-agent-buttons {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-}
+.remote-agent-disconnect[hidden],
+.remote-agent-messages[hidden] { display: none; }
 
 .remote-agent-hint {
-  margin: 10px 0 0;
+  margin: 8px 0 0;
   color: var(--muted);
   font-size: 11px;
   line-height: 1.5;
+}
+
+.remote-agent-panel .agent-chat-messages {
+  min-height: 0;
+  max-height: 260px;
+  border-top: 1px solid var(--line);
 }
 
 /* Connection notices are not failures here; only real errors stay red. */
 .remote-agent-panel .agent-chat-message-system:not(.error) .agent-chat-message-body {
   border-color: var(--line);
   color: var(--muted);
+}
+
+/* The toolbar button carries the same light while a remote agent is connected or awaited. */
+#collaborate-trigger[data-remote-light="opening"]::after,
+#collaborate-trigger[data-remote-light="waiting"]::after,
+#collaborate-trigger[data-remote-light="connected"]::after {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 7px;
+  border-radius: 50%;
+  background: var(--yellow);
+  content: '';
+  vertical-align: 1px;
+}
+#collaborate-trigger[data-remote-light="connected"]::after {
+  background: #4ade80;
+  box-shadow: 0 0 6px rgb(74 222 128 / 70%);
 }

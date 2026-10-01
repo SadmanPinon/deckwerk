@@ -240,21 +240,22 @@ const agentPanel = new AgentPanel({
 });
 const remoteAgentPanel = new RemoteAgentPanel({
   deckName: () => store.get().dir?.split(/[\\/]/).filter(Boolean).at(-1) ?? null,
+  onLight: (light) => {
+    if (collaborateButton) collaborateButton.dataset.remoteLight = light;
+  },
   api: {
-    start: async (setup) => {
+    connect: async () => {
       // The session serves the deck from disk; give it the latest first.
       await cssEditor.flush();
       await save();
-      return window.api.startRemoteAgent(setup);
+      return window.api.connectRemoteAgent();
     },
-    openTerminal: () => window.api.openRemoteAgentTerminal(),
-    end: () => window.api.endAgentSession(),
-    sshHosts: () => window.api.sshHosts(),
+    disconnect: () => window.api.disconnectRemoteAgent(),
     getState: () => window.api.getAgentPanelState(),
     onState: (listener) => window.api.onAgentPanelState(listener),
-    onStarted: (started) => {
+    onConnected: (link) => {
       remoteAgentSession = true;
-      connectAgentSession(started.connection);
+      connectAgentSession(link.connection);
       refreshCollaborationControl();
     },
   },

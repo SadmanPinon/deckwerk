@@ -69,9 +69,8 @@ export const IPC = {
   agentSessionStart: 'agentSession:start',
   agentSessionEnd: 'agentSession:end',
   agentSessionState: 'agentSession:state',
-  remoteAgentStart: 'remoteAgent:start',
-  remoteAgentOpenTerminal: 'remoteAgent:openTerminal',
-  sshHosts: 'remoteAgent:sshHosts',
+  remoteAgentConnect: 'remoteAgent:connect',
+  remoteAgentDisconnect: 'remoteAgent:disconnect',
 } as const;
 
 export interface AgentPanelMessage {
@@ -125,25 +124,13 @@ export interface AgentSessionConnection {
 
 export type AgentSessionState = AgentSessionConnection | { active: false };
 
-/** What Collaborate → Remote agent asks for (see src/main/remoteAgent.ts). */
-export interface RemoteAgentSetup {
-  /** An ssh destination: an alias from ~/.ssh/config, or user@host. */
-  host: string;
-  /** Where the deck is mirrored on the remote machine; `~/` is allowed. */
-  folder?: string;
-  /** Shell run first on the remote machine, e.g. `module load nodejs`. */
-  setup?: string;
-  /** Started inside the mirror once it is in sync; empty means sync only. */
-  agent?: string;
-}
-
-export interface RemoteAgentStart {
+/** Collaborate → Remote agent → Connect (see src/main/remoteTunnel.ts). */
+export interface RemoteAgentLink {
   connection: AgentSessionConnection;
-  /** The one command, run on this Mac, that connects the remote agent. */
-  command: string;
-  /** The folder on the remote machine the deck is mirrored into. */
-  folder: string;
-  host: string;
+  /** The one line to paste in a terminal on the agent's machine. */
+  line: string;
+  /** The public link the session is reachable at while it lasts. */
+  url: string;
 }
 
 export type { AgentContextDraft, AgentRequest, AgentResponse };

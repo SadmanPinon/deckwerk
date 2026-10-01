@@ -77,6 +77,10 @@ const HTML_SAVE_DEBOUNCE_MS = 60;
 const ECHO_TIMEOUT_MS = 15_000;
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 10_000;
+/** How often edit/ is polled for saves the file watcher cannot see. */
+const EDIT_POLL_MS = 500;
+/** How long `--until-disconnected` keeps trying a session that went away. */
+const UNTIL_DISCONNECTED_MS = 20_000;
 
 export interface SessionTarget {
   origin: string;
@@ -158,6 +162,12 @@ export interface ConnectOptions {
   io: BridgeIo;
   /** Where diagnostics go once an interactive agent owns the terminal. */
   quiet?: boolean;
+  /**
+   * Give up after the session has been unreachable this long, instead of
+   * retrying forever. A remote-agent session's link disappears when the host
+   * disconnects or quits; the bridge should not outlive it.
+   */
+  giveUpAfterMs?: number;
   /** Test hook: the `fetch` to use. */
   fetch?: typeof fetch;
 }
@@ -167,6 +177,8 @@ export interface AgentBridge {
   readonly target: SessionTarget;
   /** Resolves once the deck is mirrored and the file bridge is live. */
   ready: Promise<void>;
+  /** Resolves once the bridge has stopped: closed here, ended by the host, or given up. */
+  closed: Promise<void>;
   /** Route diagnostics to the log file instead of stderr (an agent has the terminal). */
   quiet(): void;
   close(): Promise<void>;
@@ -216,6 +228,12 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
   let socket: WebSocket | null = null;
   let closed = false;
   let reconnectDelay = RECONNECT_MIN_MS;
+  /** When the session last became unreachable; null while connected. */
+  let unreachableSince: number | null = null;
+  const editMtimes = new Map<string, number>();
+  let editPoll: NodeJS.Timeout | null = null;
+  let resolveClosed: () => void = () => {};
+  const closedPromise = new Promise<void>((resolvePromise) => { resolveClosed = resolvePromise; });
   let reconnectTimer: NodeJS.Timeout | null = null;
   const pending = new Map<string, PendingTxn>();
   /** The person's own selection, from their browser's presence. */
@@ -758,8 +776,32 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
     await onLocalHtml(target, { after: request.after, label: request.label, resultPath });
   }
 
+  /**
+   * Notice saves the watcher cannot see. File events only report writes made
+   * on this machine, and on a cluster the agent may run on another login node
+   * over the same shared folder. A cheap mtime poll of edit/ catches those;
+   * a save the watcher already synced is recognised and skipped.
+   */
+  function pollEditDir(): void {
+    void readdir(editDir).then(async (entries) => {
+      for (const entry of entries) {
+        if (!entry.endsWith('.html')) continue;
+        const path = join(editDir, entry);
+        const mtime = await stat(path).then((info) => info.mtimeMs, () => null);
+        if (mtime === null) continue;
+        const known = editMtimes.get(path);
+        editMtimes.set(path, mtime);
+        if (known !== undefined && known !== mtime) {
+          debounceLocal(`html:${path}`, HTML_SAVE_DEBOUNCE_MS, () => onLocalHtml(path));
+        }
+      }
+    }, () => undefined);
+  }
+
   function startWatchers(): void {
     const assetsDir = join(dir, 'assets');
+    pollEditDir();
+    editPoll = setInterval(pollEditDir, EDIT_POLL_MS);
     const themeInRoot = !themeFile.includes('/') && !themeFile.includes(sep);
     watchers.push(
       watch(dir, (_event, filename) => {
@@ -803,6 +845,7 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
     socket = ws;
     ws.addEventListener('open', () => {
       reconnectDelay = RECONNECT_MIN_MS;
+      unreachableSince = null;
       send({ kind: 'hello', version: COLLAB_PROTOCOL_VERSION, name, agentFor: target.participantId });
     });
     ws.addEventListener('message', (event) => {
@@ -815,11 +858,14 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
       }
       void handleServer(parsed).catch((error) => log(`server message failed: ${message(error)}`));
     });
-    ws.addEventListener('error', () => {
-      // The close event that follows carries the retry; a first failure to
-      // connect at all is reported there too.
-    });
-    ws.addEventListener('close', (event) => {
+    // One handler for both ways a connection ends. Node's WebSocket reports a
+    // refused connection with an error and no close event, leaving the socket
+    // CONNECTING for good; without this the bridge would wait on it forever,
+    // neither retrying nor giving up.
+    let lostHandled = false;
+    const lost = (code: number, reason: string): void => {
+      if (lostHandled) return;
+      lostHandled = true;
       if (socket === ws) socket = null;
       for (const [id, entry] of pending) {
         clearTimeout(entry.timer);
@@ -827,8 +873,8 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
         pending.delete(id);
       }
       if (closed) return;
-      if (event.code === 4003) {
-        const why = event.reason || 'the server refused this connection';
+      if (code === 4003) {
+        const why = reason || 'the server refused this connection';
         if (!readySettled) {
           readySettled = true;
           failReady(new Error(why));
@@ -839,8 +885,14 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
       }
       if (!readySettled && reconnectDelay >= RECONNECT_MAX_MS) {
         readySettled = true;
-        failReady(new Error(`Could not reach ${target.origin} (${event.reason || `code ${event.code}`})`));
+        failReady(new Error(`Could not reach ${target.origin} (${reason || `code ${code}`})`));
         closed = true;
+        return;
+      }
+      unreachableSince ??= Date.now();
+      if (options.giveUpAfterMs !== undefined && Date.now() - unreachableSince >= options.giveUpAfterMs) {
+        log(`the session has been unreachable for ${Math.round((Date.now() - unreachableSince) / 1000)}s; stopping`);
+        void close();
         return;
       }
       log(`disconnected — retrying in ${Math.round(reconnectDelay / 1000)}s`);
@@ -849,7 +901,15 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
         connect();
       }, reconnectDelay);
       reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
+    };
+    ws.addEventListener('error', () => {
+      // An open socket's error is followed by its close event. A failed one
+      // is left alone: calling close() on it makes it report the error again,
+      // over and over.
+      if (lostHandled || ws.readyState === WebSocket.OPEN) return;
+      lost(1006, 'connection failed');
     });
+    ws.addEventListener('close', (event) => lost(event.code, event.reason));
   }
 
   async function handleServer(msg: ServerMessage): Promise<void> {
@@ -867,6 +927,7 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
           startWatchers();
           await drainInbox();
           markReady();
+          report(`live at ${dir} on ${hostname()}`);
         }
         log(`connected to ${target.origin} as ${msg.self.name}`);
         return;
@@ -918,6 +979,8 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
     if (closed) return;
     closed = true;
     if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (editPoll) clearInterval(editPoll);
+    editPoll = null;
     if (persistTimer) {
       clearTimeout(persistTimer);
       persistTimer = null;
@@ -946,6 +1009,7 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
         ws.close();
       });
     }
+    resolveClosed();
   }
 
   void (async () => {
@@ -960,6 +1024,7 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
         failReady(error instanceof Error ? error : new Error(String(error)));
       }
       closed = true;
+      resolveClosed();
     }
   })();
 
@@ -967,6 +1032,7 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
     dir,
     target,
     ready,
+    closed: closedPromise,
     quiet: () => { quiet = true; },
     close,
   };
@@ -978,6 +1044,8 @@ export interface ConnectCommandOptions {
   url: string;
   dir?: string;
   name?: string;
+  /** Stop when the host ends the session or its link is gone, rather than retrying. */
+  untilDisconnected?: boolean;
   /** Command line to start inside the mirror; `false` runs only the bridge. */
   agent?: string | false;
   io: BridgeIo;
@@ -987,7 +1055,13 @@ export interface ConnectCommandOptions {
 /** The interactive flow: mirror, then optionally run an explicitly named agent. */
 export async function runConnectCommand(options: ConnectCommandOptions): Promise<number> {
   const { io } = options;
-  const bridge = connectAgentBridge({ url: options.url, dir: options.dir, name: options.name, io });
+  const bridge = connectAgentBridge({
+    url: options.url,
+    dir: options.dir,
+    name: options.name,
+    io,
+    ...(options.untilDisconnected ? { giveUpAfterMs: UNTIL_DISCONNECTED_MS } : {}),
+  });
   io.err(`Connecting to ${bridge.target.origin} (deck "${bridge.target.deckId}")…`);
   await bridge.ready;
   io.err(`Deck mirrored at ${bridge.dir}`);
@@ -995,8 +1069,9 @@ export async function runConnectCommand(options: ConnectCommandOptions): Promise
   const command = typeof options.agent === 'string' ? options.agent : null;
   if (!command) {
     io.err('Bridge running. Point your existing agent at that folder; Ctrl-C here disconnects.');
-    await waitForStop(options.signal);
+    await Promise.race([waitForStop(options.signal), bridge.closed]);
     await bridge.close();
+    io.err(`Disconnected from ${bridge.target.origin}. The mirror stays at ${bridge.dir}.`);
     return 0;
   }
 
@@ -1107,8 +1182,10 @@ watch the deck.
  */
 async function readSettled(path: string): Promise<string> {
   let contents = await readFile(path, 'utf8');
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 150));
+  // Callers have already waited for the file's events to go quiet; this only
+  // confirms the bytes stopped changing, so it can be brief.
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 40));
     const again = await readFile(path, 'utf8');
     if (again === contents) return contents;
     contents = again;

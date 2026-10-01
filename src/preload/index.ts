@@ -25,8 +25,7 @@ import type {
   PdfExportRequest,
   PresentationCommand,
   PresentationState,
-  RemoteAgentSetup,
-  RemoteAgentStart,
+  RemoteAgentLink,
   PresentOptions,
   RasterResult,
   RasterSaveRequest,
@@ -169,10 +168,8 @@ const api = {
   endAgentSession: (): Promise<void> => ipcRenderer.invoke(IPC.agentSessionEnd),
   onAgentSessionState: (fn: (state: AgentSessionState) => void): (() => void) =>
     on(IPC.agentSessionState, fn),
-  startRemoteAgent: (setup: RemoteAgentSetup): Promise<RemoteAgentStart> =>
-    ipcRenderer.invoke(IPC.remoteAgentStart, setup),
-  openRemoteAgentTerminal: (): Promise<void> => ipcRenderer.invoke(IPC.remoteAgentOpenTerminal),
-  sshHosts: (): Promise<string[]> => ipcRenderer.invoke(IPC.sshHosts),
+  connectRemoteAgent: (): Promise<RemoteAgentLink> => ipcRenderer.invoke(IPC.remoteAgentConnect),
+  disconnectRemoteAgent: (): Promise<void> => ipcRenderer.invoke(IPC.remoteAgentDisconnect),
 
   listDisplays: (): Promise<DisplayInfo[]> => ipcRenderer.invoke(IPC.displayList),
   present: (slideIndex: number, options?: PresentOptions): Promise<void> =>

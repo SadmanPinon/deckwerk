@@ -1,15 +1,14 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentPanelState, RemoteAgentSetup, RemoteAgentStart } from '../src/shared/ipc.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AgentPanelState, RemoteAgentLink } from '../src/shared/ipc.js';
 import { openCollaborateChooser } from '../src/renderer/editor/collaborateChooser.js';
-import { RemoteAgentPanel, type RemoteAgentPanelApi } from '../src/renderer/editor/remoteAgentPanel.js';
+import {
+  RemoteAgentPanel,
+  type RemoteAgentLight,
+  type RemoteAgentPanelApi,
+} from '../src/renderer/editor/remoteAgentPanel.js';
 
 /** Collaborate's chooser, and the Remote agent panel driven through a fake main process. */
-
-function memoryStorage(): Pick<Storage, 'getItem' | 'setItem'> {
-  const values = new Map<string, string>();
-  return { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => void values.set(key, value) };
-}
 
 describe('collaborate chooser', () => {
   beforeEach(() => document.body.replaceChildren());
@@ -42,119 +41,106 @@ describe('collaborate chooser', () => {
 
 describe('remote agent panel', () => {
   let stateListener: ((state: AgentPanelState) => void) | null;
-  let api: RemoteAgentPanelApi & { started: RemoteAgentSetup[] };
-  let storage: ReturnType<typeof memoryStorage>;
+  let api: RemoteAgentPanelApi;
+  let lights: RemoteAgentLight[];
 
-  const started = (setup: RemoteAgentSetup): RemoteAgentStart => ({
-    connection: { active: true, deckId: 'talk', wsUrl: 'ws://127.0.0.1:5800/ws?deck=talk&token=t', name: 'me', mode: 'agent' },
-    command: `ssh -t -R 41234:127.0.0.1:5800 '${setup.host}' 'bash -lc …'`,
-    folder: setup.folder || '~/deckwerk/talk',
-    host: setup.host,
-  });
-
+  const LINE = "curl -fsSL 'https://brave-otter.trycloudflare.com/connect.sh?token=t&agent=p' | bash";
+  const link: RemoteAgentLink = {
+    connection: { active: true, deckId: 'Fall26', wsUrl: 'ws://127.0.0.1:5800/ws?deck=Fall26&token=t', name: 'me', mode: 'agent' },
+    line: LINE,
+    url: 'https://brave-otter.trycloudflare.com',
+  };
   const state = (over: Partial<AgentPanelState> = {}): AgentPanelState => ({
-    deckPath: '/decks/talk', connection: 'unavailable', agentName: null, scratchpad: null,
+    deckPath: '/decks/Fall26', connection: 'unavailable', agentName: null, scratchpad: null,
     busy: false, activity: null, messages: [], error: null, ...over,
   });
 
   beforeEach(() => {
     document.body.replaceChildren();
     stateListener = null;
-    storage = memoryStorage();
+    lights = [];
     api = {
-      started: [],
-      start: vi.fn(async (setup: RemoteAgentSetup) => {
-        api.started.push(setup);
-        return started(setup);
-      }),
-      openTerminal: vi.fn(async () => {}),
-      end: vi.fn(async () => {}),
-      sshHosts: vi.fn(async () => ['cluster', 'lab-gpu']),
+      connect: vi.fn(async () => link),
+      disconnect: vi.fn(async () => {}),
       getState: vi.fn(async () => state()),
       onState: (listener) => {
         stateListener = listener;
         return () => {};
       },
-      onStarted: vi.fn(),
+      onConnected: vi.fn(),
+      copy: vi.fn(async () => {}),
     };
   });
 
-  afterEach(() => vi.restoreAllMocks());
-
   const open = () => {
-    const panel = new RemoteAgentPanel({ api, deckName: () => 'talk', storage });
+    const panel = new RemoteAgentPanel({ api, deckName: () => 'Fall26', onLight: (light) => lights.push(light) });
     panel.show();
     return panel;
   };
+  const light = (panel: RemoteAgentPanel) => panel.element.querySelector<HTMLElement>('.remote-agent-light')!;
 
-  it('asks for the host, then shows the one command and opens it in Terminal', async () => {
+  it('starts off, with nothing but a Connect button', () => {
     const panel = open();
-    const host = panel.element.querySelector<HTMLInputElement>('#remote-agent-host')!;
-    expect(host.required).toBe(true);
-    expect(panel.element.querySelector<HTMLInputElement>('#remote-agent-agent')!.value).toBe('claude');
-    host.value = 'cluster';
-    panel.element.querySelector<HTMLInputElement>('#remote-agent-folder')!.value = '~/project_A/slides';
-    panel.element.querySelector<HTMLFormElement>('form')!.requestSubmit();
-    await vi.waitFor(() => expect(api.start).toHaveBeenCalledOnce());
-    expect(api.started[0]).toEqual({ host: 'cluster', folder: '~/project_A/slides', setup: '', agent: 'claude' });
-    await vi.waitFor(() => expect(panel.element.querySelector('.remote-agent-connect')!.hasAttribute('hidden'))
-      .toBe(false));
-    expect(panel.element.querySelector('code')!.textContent).toContain("'cluster'");
-    expect(panel.element.querySelector('.remote-agent-hint')!.textContent).toContain('~/project_A/slides');
-    expect(api.onStarted).toHaveBeenCalledOnce();
-
-    panel.element.querySelector<HTMLButtonElement>('.remote-agent-open')!.click();
-    expect(api.openTerminal).toHaveBeenCalledOnce();
+    expect(light(panel).dataset.light).toBe('off');
+    expect(panel.element.querySelector<HTMLButtonElement>('.remote-agent-connect-button')!.hidden).toBe(false);
+    expect(panel.element.querySelector<HTMLElement>('.remote-agent-handshake')!.hidden).toBe(true);
+    expect(panel.element.querySelector('input')).toBeNull();
   });
 
-  it('shows the agent connecting and what it does to the deck', async () => {
+  it('Connect shows the one line to paste, and copies it', async () => {
     const panel = open();
-    panel.element.querySelector<HTMLInputElement>('#remote-agent-host')!.value = 'cluster';
-    panel.element.querySelector<HTMLFormElement>('form')!.requestSubmit();
-    await vi.waitFor(() => expect(api.start).toHaveBeenCalled());
-    await vi.waitFor(() => expect(panel.element.querySelector('.agent-chat-status')!.textContent)
-      .toContain('Waiting'));
+    panel.element.querySelector<HTMLButtonElement>('.remote-agent-connect-button')!.click();
+    await vi.waitFor(() => expect(light(panel).dataset.light).toBe('waiting'));
+    expect(lights).toEqual(['off', 'opening', 'waiting']);
+    expect(api.onConnected).toHaveBeenCalledWith(link);
+    expect(panel.element.querySelector('code')!.textContent).toBe(LINE);
+    expect(panel.element.querySelector('.remote-agent-hint')!.textContent).toContain('./Fall26');
+    panel.element.querySelector<HTMLButtonElement>('.agent-chat-connect-copy')!.click();
+    expect(api.copy).toHaveBeenCalledWith(LINE);
+  });
+
+  it('turns green when the server side connects, and logs what it does', async () => {
+    const panel = open();
+    panel.element.querySelector<HTMLButtonElement>('.remote-agent-connect-button')!.click();
+    await vi.waitFor(() => expect(light(panel).dataset.light).toBe('waiting'));
     stateListener!(state({
       connection: 'ready',
-      agentName: 'Agent on cluster',
-      messages: [{ id: 'm1', role: 'system', text: 'synced edit/work.html: replaced 1 slide' }],
+      agentName: 'Agent on vulcan',
+      messages: [{ id: 'm1', role: 'system', text: 'live at /home/pinon/adajepa/slides/Fall26 on vulcan' }],
     }));
-    expect(panel.element.querySelector('.agent-chat-status')!.textContent).toBe('Connected · Agent on cluster');
+    expect(light(panel).dataset.light).toBe('connected');
+    expect(light(panel).textContent).toBe('Connected · Agent on vulcan');
+    expect(panel.element.querySelector<HTMLElement>('.remote-agent-handshake')!.hidden).toBe(true);
     expect(panel.element.querySelector('.agent-chat-message-body')!.textContent)
-      .toBe('synced edit/work.html: replaced 1 slide');
+      .toContain('/home/pinon/adajepa/slides/Fall26');
   });
 
-  it('remembers the host, and the folder per deck', async () => {
-    const first = open();
-    first.element.querySelector<HTMLInputElement>('#remote-agent-host')!.value = 'cluster';
-    first.element.querySelector<HTMLInputElement>('#remote-agent-folder')!.value = '~/project_A/slides';
-    first.element.querySelector<HTMLFormElement>('form')!.requestSubmit();
-    await vi.waitFor(() => expect(api.start).toHaveBeenCalled());
-    first.element.remove();
-    const second = open();
-    expect(second.element.querySelector<HTMLInputElement>('#remote-agent-host')!.value).toBe('cluster');
-    expect(second.element.querySelector<HTMLInputElement>('#remote-agent-folder')!.value).toBe('~/project_A/slides');
-  });
-
-  it('ends the session and goes back to the form', async () => {
+  it('Disconnect closes it and goes back to off', async () => {
     const panel = open();
-    panel.element.querySelector<HTMLInputElement>('#remote-agent-host')!.value = 'cluster';
-    panel.element.querySelector<HTMLFormElement>('form')!.requestSubmit();
-    await vi.waitFor(() => expect(panel.element.querySelector('.remote-agent-connect')!.hasAttribute('hidden'))
-      .toBe(false));
-    panel.element.querySelector<HTMLButtonElement>('.remote-agent-end')!.click();
-    await vi.waitFor(() => expect(api.end).toHaveBeenCalledOnce());
-    await vi.waitFor(() => expect(panel.element.querySelector('form')!.hasAttribute('hidden')).toBe(false));
+    panel.element.querySelector<HTMLButtonElement>('.remote-agent-connect-button')!.click();
+    await vi.waitFor(() => expect(light(panel).dataset.light).toBe('waiting'));
+    panel.element.querySelector<HTMLButtonElement>('.remote-agent-disconnect')!.click();
+    await vi.waitFor(() => expect(api.disconnect).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(light(panel).dataset.light).toBe('off'));
+    expect(panel.element.querySelector<HTMLButtonElement>('.remote-agent-connect-button')!.hidden).toBe(false);
   });
 
-  it('reports a failure to start where the person is looking', async () => {
-    api.start = vi.fn(async () => {
-      throw new Error("Error invoking remote method 'remoteAgent:start': Error: Enter the SSH host you log in to");
+  it('says why when the link cannot open', async () => {
+    api.connect = vi.fn(async () => {
+      throw new Error("Error invoking remote method 'remoteAgent:connect': Error: Install it once with: brew install cloudflared");
     });
     const panel = open();
-    panel.element.querySelector<HTMLInputElement>('#remote-agent-host')!.value = 'x y';
-    panel.element.querySelector<HTMLFormElement>('form')!.requestSubmit();
-    await vi.waitFor(() => expect(panel.element.querySelector('.agent-chat-error')!.textContent)
-      .toBe('Enter the SSH host you log in to'));
+    panel.element.querySelector<HTMLButtonElement>('.remote-agent-connect-button')!.click();
+    await vi.waitFor(() => expect(light(panel).dataset.light).toBe('error'));
+    expect(panel.element.querySelector('.agent-chat-error')!.textContent)
+      .toBe('Install it once with: brew install cloudflared');
+  });
+
+  it('goes back to off when the session ends elsewhere', async () => {
+    const panel = open();
+    panel.element.querySelector<HTMLButtonElement>('.remote-agent-connect-button')!.click();
+    await vi.waitFor(() => expect(light(panel).dataset.light).toBe('waiting'));
+    panel.sessionEnded();
+    expect(light(panel).dataset.light).toBe('off');
   });
 });

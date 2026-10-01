@@ -1,58 +1,51 @@
-import type { AgentPanelState, RemoteAgentSetup, RemoteAgentStart } from '@shared/ipc.js';
+import type { AgentPanelState, RemoteAgentLink } from '@shared/ipc.js';
 
 /**
- * Collaborate → Remote agent: connect an agent running on another machine (a
- * lab server or cluster, over SSH) to the open deck, and watch it work.
+ * Collaborate → Remote agent: let an agent on a server or cluster (Claude Code
+ * in a terminal there) edit the open deck live.
  *
- * The form asks for the SSH host once; everything else has a default. Starting
- * hosts the deck as an agent session and produces one command for this Mac's
- * terminal (see src/main/remoteAgent.ts): it logs in, mirrors the deck into a
- * folder over there, keeps it in sync, and starts the agent in it. Every save
- * the agent makes lands in this editor a moment later, in History under the
- * agent's name.
+ * Nothing is reachable until Connect. Connect hosts the deck as a token-locked
+ * session behind a temporary public link and shows one line to paste in a
+ * terminal on that machine; the light turns green once it has connected.
+ * Disconnect, closing the window or quitting DeckWerk takes the link down.
  */
 
 export interface RemoteAgentPanelApi {
-  start: (setup: RemoteAgentSetup) => Promise<RemoteAgentStart>;
-  openTerminal: () => Promise<void>;
-  end: () => Promise<void>;
-  sshHosts: () => Promise<string[]>;
+  connect: () => Promise<RemoteAgentLink>;
+  disconnect: () => Promise<void>;
   getState: () => Promise<AgentPanelState>;
   onState: (listener: (state: AgentPanelState) => void) => () => void;
-  /** The started session, for the editor to join as a peer. */
-  onStarted: (started: RemoteAgentStart) => void;
+  /** The session that Connect started, for the editor to join as a peer. */
+  onConnected: (link: RemoteAgentLink) => void;
+  copy?: (text: string) => Promise<void>;
 }
 
 export interface RemoteAgentPanelOptions {
   api: RemoteAgentPanelApi;
-  /** The open deck's folder name, for per-deck defaults. */
+  /** The open deck's folder name: the folder the agent's side creates. */
   deckName: () => string | null;
-  /** Remembered values; injectable for tests. */
-  storage?: Pick<Storage, 'getItem' | 'setItem'>;
+  /** Light changes, for a matching mark on the toolbar button. */
+  onLight?: (light: RemoteAgentLight) => void;
 }
 
-const STORE_PREFIX = 'deckwerk.remote-agent.';
+export type RemoteAgentLight = 'off' | 'opening' | 'waiting' | 'connected' | 'error';
 
 export class RemoteAgentPanel {
   readonly element: HTMLElement;
   private readonly api: RemoteAgentPanelApi;
   private readonly options: RemoteAgentPanelOptions;
   private readonly status: HTMLElement;
-  private readonly form: HTMLFormElement;
-  private readonly host: HTMLInputElement;
-  private readonly folder: HTMLInputElement;
-  private readonly setup: HTMLInputElement;
-  private readonly agent: HTMLInputElement;
-  private readonly hostList: HTMLDataListElement;
-  private readonly startButton: HTMLButtonElement;
-  private readonly connect: HTMLElement;
+  private readonly intro: HTMLElement;
+  private readonly connectButton: HTMLButtonElement;
+  private readonly handshake: HTMLElement;
   private readonly code: HTMLElement;
   private readonly hint: HTMLElement;
+  private readonly disconnectButton: HTMLButtonElement;
   private readonly messages: HTMLElement;
   private readonly error: HTMLElement;
   private readonly shownMessages = new Set<string>();
-  private started: RemoteAgentStart | null = null;
-  private connected = false;
+  private link: RemoteAgentLink | null = null;
+  private light: RemoteAgentLight = 'off';
 
   constructor(options: RemoteAgentPanelOptions) {
     this.options = options;
@@ -73,100 +66,71 @@ export class RemoteAgentPanel {
     title.id = 'remote-agent-title';
     title.textContent = 'Remote agent';
     this.status = document.createElement('span');
-    this.status.className = 'agent-chat-status';
-    this.status.textContent = 'Not connected';
+    this.status.className = 'agent-chat-status remote-agent-light';
     titleWrap.append(title, this.status);
     const actions = document.createElement('div');
     actions.className = 'agent-chat-header-actions';
     actions.append(quietButton('Hide', () => this.hide()));
     header.append(titleWrap, actions);
 
-    this.form = document.createElement('form');
-    this.form.className = 'remote-agent-form';
-    this.hostList = document.createElement('datalist');
-    this.hostList.id = 'remote-agent-hosts';
-    this.host = field(this.form, 'SSH host', 'remote-agent-host', 'cluster or you@login.example.edu', true);
-    this.host.setAttribute('list', this.hostList.id);
-    this.host.autocomplete = 'off';
-    this.folder = field(this.form, 'Folder on that machine', 'remote-agent-folder', '~/deckwerk/your-talk');
-    this.setup = field(this.form, 'Run first (optional)', 'remote-agent-setup', 'module load nodejs');
-    this.agent = field(this.form, 'Agent', 'remote-agent-agent', 'claude   (empty: only sync the folder)');
-    this.form.append(this.hostList);
-    this.startButton = document.createElement('button');
-    this.startButton.type = 'submit';
-    this.startButton.className = 'primary remote-agent-start';
-    this.startButton.textContent = 'Start session';
-    this.form.append(this.startButton);
-    this.form.addEventListener('submit', (event) => {
-      event.preventDefault();
-      void this.startSession();
-    });
+    this.intro = document.createElement('div');
+    this.intro.className = 'remote-agent-intro';
+    const explain = document.createElement('p');
+    explain.textContent = 'Let Claude Code on your server or cluster edit this deck live. '
+      + 'Nothing is reachable until you connect; Disconnect, or quitting DeckWerk, closes it.';
+    this.connectButton = document.createElement('button');
+    this.connectButton.type = 'button';
+    this.connectButton.className = 'primary remote-agent-connect-button';
+    this.connectButton.textContent = 'Connect';
+    this.connectButton.addEventListener('click', () => void this.connect());
+    this.intro.append(explain, this.connectButton);
 
-    this.connect = document.createElement('div');
-    this.connect.className = 'agent-chat-connect remote-agent-connect';
-    this.connect.hidden = true;
+    this.handshake = document.createElement('div');
+    this.handshake.className = 'agent-chat-connect remote-agent-handshake';
+    this.handshake.hidden = true;
     const lead = document.createElement('p');
-    lead.textContent = 'Run this in a terminal on this Mac:';
+    lead.textContent = 'In a terminal on your server, go to the folder for the deck, then paste:';
     const row = document.createElement('div');
     row.className = 'agent-chat-connect-row';
     this.code = document.createElement('code');
-    const copy = quietButton('Copy', () => void navigator.clipboard.writeText(this.started?.command ?? '').then(
-      () => { copy.textContent = 'Copied'; setTimeout(() => { copy.textContent = 'Copy'; }, 1500); },
-      () => { copy.textContent = 'Select and copy'; },
-    ));
+    const copy = quietButton('Copy', () => void this.copyLine(copy));
     copy.classList.add('agent-chat-connect-copy');
     row.append(this.code, copy);
-    const open = document.createElement('button');
-    open.type = 'button';
-    open.className = 'primary remote-agent-open';
-    open.textContent = 'Open in Terminal';
-    open.addEventListener('click', () => void this.api.openTerminal().catch((error) => this.showError(error)));
-    const end = document.createElement('button');
-    end.type = 'button';
-    end.className = 'danger remote-agent-end';
-    end.textContent = 'End session';
-    end.addEventListener('click', () => void this.endSession());
-    const buttons = document.createElement('div');
-    buttons.className = 'remote-agent-buttons';
-    buttons.append(open, end);
     this.hint = document.createElement('p');
     this.hint.className = 'remote-agent-hint';
-    this.connect.append(lead, row, buttons, this.hint);
+    this.handshake.append(lead, row, this.hint);
 
-    this.messages = document.createElement('div');
-    this.messages.className = 'agent-chat-messages';
-    this.messages.setAttribute('aria-live', 'polite');
-    const empty = document.createElement('div');
-    empty.className = 'agent-chat-empty';
-    empty.textContent = 'What the agent does to the deck appears here, and on the slides themselves.';
-    this.messages.append(empty);
+    this.disconnectButton = document.createElement('button');
+    this.disconnectButton.type = 'button';
+    this.disconnectButton.className = 'danger remote-agent-disconnect';
+    this.disconnectButton.textContent = 'Disconnect';
+    this.disconnectButton.hidden = true;
+    this.disconnectButton.addEventListener('click', () => void this.disconnect());
 
     this.error = document.createElement('div');
     this.error.className = 'agent-chat-error';
     this.error.hidden = true;
 
-    panel.append(header, this.form, this.connect, this.error, this.messages);
+    this.messages = document.createElement('div');
+    this.messages.className = 'agent-chat-messages remote-agent-messages';
+    this.messages.setAttribute('aria-live', 'polite');
+    this.messages.hidden = true;
+
+    panel.append(header, this.intro, this.handshake, this.disconnectButton, this.error, this.messages);
     document.body.append(panel);
     this.element = panel;
+    this.setLight('off');
     this.api.onState((state) => this.applyState(state));
   }
 
-  isOpen(): boolean {
-    return !this.element.hidden;
+  getLight(): RemoteAgentLight {
+    return this.light;
   }
 
   show(): void {
     this.element.hidden = false;
-    this.restore();
-    void this.api.sshHosts().then((hosts) => {
-      this.hostList.replaceChildren(...hosts.map((name) => {
-        const option = document.createElement('option');
-        option.value = name;
-        return option;
-      }));
-    }).catch(() => {});
-    if (this.started) void this.api.getState().then((state) => this.applyState(state)).catch(() => {});
-    else (this.host.value ? this.startButton : this.host).focus();
+    if (this.link) void this.api.getState().then((state) => this.applyState(state)).catch(() => {});
+    else this.connectButton.focus();
   }
 
   hide(): void {
@@ -178,139 +142,106 @@ export class RemoteAgentPanel {
     else this.hide();
   }
 
-  /** The session ended elsewhere (End collaboration, the window, the app). */
+  /** The session ended elsewhere: the window, the app, or the link dying. */
   sessionEnded(): void {
-    this.started = null;
-    this.connected = false;
-    this.connect.hidden = true;
-    this.form.hidden = false;
-    this.status.textContent = 'Not connected';
-    delete this.status.dataset.state;
+    this.link = null;
+    this.handshake.hidden = true;
+    this.disconnectButton.hidden = true;
+    this.intro.hidden = false;
+    this.connectButton.disabled = false;
+    this.setLight('off');
   }
 
-  private async startSession(): Promise<void> {
-    const setup: RemoteAgentSetup = {
-      host: this.host.value.trim(),
-      folder: this.folder.value.trim(),
-      setup: this.setup.value.trim(),
-      agent: this.agent.value.trim(),
-    };
-    this.remember(setup);
+  private async connect(): Promise<void> {
     this.error.hidden = true;
-    this.startButton.disabled = true;
-    this.status.textContent = 'Starting…';
+    this.connectButton.disabled = true;
+    this.setLight('opening');
     try {
-      this.started = await this.api.start(setup);
-      this.api.onStarted(this.started);
-      this.form.hidden = true;
-      this.connect.hidden = false;
-      this.code.textContent = this.started.command;
-      this.code.title = this.started.command;
-      const agentNote = setup.agent
-        ? `${setup.agent.split(/\s+/)[0]} starts there once the folder is in sync.`
-        : 'Point your agent at that folder; only an agent on that same machine is seen.';
-      this.hint.textContent = `Logs in to ${this.started.host} and keeps ${this.started.folder} in sync with this deck. ${agentNote}`;
-      this.status.textContent = 'Waiting for the remote side…';
-      this.status.dataset.state = 'idle';
+      this.link = await this.api.connect();
+      this.api.onConnected(this.link);
+      this.intro.hidden = true;
+      this.handshake.hidden = false;
+      this.disconnectButton.hidden = false;
+      this.code.textContent = this.link.line;
+      this.code.title = this.link.line;
+      const folder = (this.options.deckName() ?? 'deck').replace(/[^A-Za-z0-9._-]+/g, '-');
+      this.hint.textContent = `It creates ./${folder} there (or updates it) and keeps it live; `
+        + 'then run claude in that folder. To use another folder, add its path at the end.';
+      this.setLight('waiting');
     } catch (error) {
-      this.status.textContent = 'Not connected';
+      this.connectButton.disabled = false;
+      this.setLight('error');
       this.showError(error);
-    } finally {
-      this.startButton.disabled = false;
     }
   }
 
-  private async endSession(): Promise<void> {
+  private async disconnect(): Promise<void> {
+    this.disconnectButton.disabled = true;
     try {
-      await this.api.end();
+      await this.api.disconnect();
     } catch (error) {
       this.showError(error);
+    } finally {
+      this.disconnectButton.disabled = false;
     }
     this.sessionEnded();
   }
 
+  private async copyLine(button: HTMLButtonElement): Promise<void> {
+    const line = this.link?.line ?? '';
+    try {
+      await (this.api.copy ?? ((text: string) => navigator.clipboard.writeText(text)))(line);
+      button.textContent = 'Copied';
+      setTimeout(() => { button.textContent = 'Copy'; }, 1500);
+    } catch {
+      button.textContent = 'Select and copy';
+    }
+  }
+
   private applyState(state: AgentPanelState): void {
-    if (!this.started) return;
-    this.connected = state.connection === 'ready';
-    this.status.textContent = !this.connected
-      ? 'Waiting for the remote side…'
-      : state.busy ? state.activity ?? 'Working…' : `Connected · ${state.agentName ?? 'agent'}`;
-    this.status.dataset.state = this.connected ? (state.busy ? 'busy' : 'ready') : 'idle';
+    if (!this.link) return;
+    const connected = state.connection === 'ready';
+    this.setLight(connected ? 'connected' : 'waiting', connected
+      ? (state.busy ? state.activity ?? 'Working…' : `Connected · ${state.agentName ?? 'agent'}`)
+      : undefined);
+    // Once the agent's side is live, the line has done its job.
+    this.handshake.hidden = connected;
     if (state.error) this.showError(state.error);
     for (const message of state.messages) {
       if (this.shownMessages.has(message.id)) continue;
       this.shownMessages.add(message.id);
-      this.messages.querySelector('.agent-chat-empty')?.remove();
       const node = document.createElement('div');
       node.className = `agent-chat-message agent-chat-message-${message.role}`;
-      node.dataset.messageId = message.id;
+      node.classList.toggle('error', message.error === true);
       const body = document.createElement('div');
       body.className = 'agent-chat-message-body';
       body.textContent = message.text;
-      node.classList.toggle('error', message.error === true);
       node.append(body);
       this.messages.append(node);
+      this.messages.hidden = false;
     }
     this.messages.scrollTop = this.messages.scrollHeight;
   }
 
-  private restore(): void {
-    const store = this.options.storage ?? localStorage;
-    const deck = this.options.deckName() ?? 'deck';
-    const read = (key: string) => {
-      try {
-        return store.getItem(STORE_PREFIX + key);
-      } catch {
-        return null;
-      }
-    };
-    if (!this.host.value) this.host.value = read('host') ?? '';
-    if (!this.setup.value) this.setup.value = read('setup') ?? '';
-    if (!this.agent.value) this.agent.value = read('agent') ?? 'claude';
-    this.folder.value = read(`folder:${deck}`) ?? '';
-    this.folder.placeholder = `~/deckwerk/${deck.replace(/[^A-Za-z0-9._-]+/g, '-')}`;
-  }
-
-  private remember(setup: RemoteAgentSetup): void {
-    const store = this.options.storage ?? localStorage;
-    const deck = this.options.deckName() ?? 'deck';
-    try {
-      store.setItem(`${STORE_PREFIX}host`, setup.host);
-      store.setItem(`${STORE_PREFIX}setup`, setup.setup ?? '');
-      store.setItem(`${STORE_PREFIX}agent`, setup.agent ?? '');
-      store.setItem(`${STORE_PREFIX}folder:${deck}`, setup.folder ?? '');
-    } catch {
-      // Remembering is a convenience; the session works without it.
-    }
+  private setLight(light: RemoteAgentLight, text?: string): void {
+    this.light = light;
+    this.status.dataset.light = light;
+    this.status.textContent = text ?? {
+      off: 'Off',
+      opening: 'Opening a secure link…',
+      waiting: 'Waiting for your server…',
+      connected: 'Connected',
+      error: 'Could not connect',
+    }[light];
+    this.options.onLight?.(light);
   }
 
   private showError(error: unknown): void {
     this.error.hidden = false;
-    this.error.textContent = error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(error);
+    this.error.textContent = error instanceof Error
+      ? error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
+      : String(error);
   }
-}
-
-function field(
-  form: HTMLFormElement,
-  label: string,
-  id: string,
-  placeholder: string,
-  required = false,
-): HTMLInputElement {
-  const wrap = document.createElement('label');
-  wrap.className = 'remote-agent-field';
-  wrap.htmlFor = id;
-  const caption = document.createElement('span');
-  caption.textContent = label;
-  const input = document.createElement('input');
-  input.id = id;
-  input.type = 'text';
-  input.placeholder = placeholder;
-  input.spellcheck = false;
-  input.required = required;
-  wrap.append(caption, input);
-  form.append(wrap);
-  return input;
 }
 
 function quietButton(label: string, action: () => void): HTMLButtonElement {

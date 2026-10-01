@@ -24,6 +24,7 @@ import {
 } from './streamingRenditions.js';
 import { ClientMessageSchema, COLLAB_PROTOCOL_VERSION, type PresenceState, type ServerMessage } from '../shared/collab.js';
 import { CollabSession } from './collabSession.js';
+import { connectScript } from './connectScript.js';
 import { readZip, writeZip, type ZipEntry, type ZipFile } from './zip.js';
 import {
   compileHtmlToSlides,
@@ -933,6 +934,33 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     const path = decodeURIComponent(url.pathname);
     const deckParam = url.searchParams.get('deck');
     const agentSessionParam = normalizeSharedParticipantId(url.searchParams.get('agentSession'));
+
+    // The handshake a remote-agent session hands out: the agent's machine
+    // pipes this into bash (connectScript.ts). Only a token-locked session
+    // offers it, and the token gate has already been passed to get here.
+    if (path === '/connect.sh' && request.method === 'GET') {
+      if (!localAgents || !options.sessionToken) {
+        return respondJson(response, 404, { error: 'not a remote-agent session' });
+      }
+      const deckId = deckParam ?? hostedDeckId;
+      const participant = url.searchParams.get('agent');
+      if (!deckId || !participant || !/^[a-zA-Z0-9_-]{8,80}$/.test(participant)) {
+        return respondJson(response, 400, { error: 'missing deck or agent' });
+      }
+      const hostHeader = request.headers.host ?? '';
+      const host = /^[A-Za-z0-9.:[\]-]+$/.test(hostHeader) ? hostHeader : `127.0.0.1:${boundPort}`;
+      const forwarded = request.headers['x-forwarded-proto'];
+      const proto = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim()
+        || (host.endsWith('.trycloudflare.com') ? 'https' : 'http');
+      response.writeHead(200, { 'content-type': 'text/x-shellscript; charset=utf-8', 'cache-control': 'no-store' });
+      response.end(connectScript({
+        origin: `${proto === 'https' ? 'https' : 'http'}://${host}`,
+        deckId,
+        participantId: participant,
+        token: options.sessionToken,
+      }));
+      return;
+    }
 
     if (path.startsWith('/api/agent-mirror/') && request.headers[BRIDGE_HEADER] !== '1') {
       return respondJson(response, 404, { error: 'not found' });

@@ -1,18 +1,12 @@
 import { existsSync, mkdirSync, watch } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { homedir, userInfo } from 'node:os';
+import { userInfo } from 'node:os';
 import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import { BrowserWindow, app, clipboard, ipcMain, screen, shell } from 'electron';
 import type { Display, IpcMainInvokeEvent, WebContents } from 'electron';
 import type { AnnotationCommand } from '@shared/annotations.js';
-import {
-  defaultRemoteFolder,
-  isSshDestination,
-  pickRemotePort,
-  remoteAgentCommand,
-  sshConfigHosts,
-} from './remoteAgent.js';
+import { findCloudflared, openQuickTunnel, type QuickTunnel } from './remoteTunnel.js';
 import { parseDeck, type Deck } from '@shared/deck.js';
 import type { DeckHistoryDocument } from '@shared/deckHistory.js';
 import {
@@ -42,8 +36,7 @@ import type {
   OperationProgress,
   PresentationCommand,
   PresentationState,
-  RemoteAgentSetup,
-  RemoteAgentStart,
+  RemoteAgentLink,
   PdfExportRequest,
   WebExportRequest,
   PresentOptions,
@@ -155,13 +148,17 @@ const localAgents = new LocalAgentRegistry();
 let desktopAgentParticipantId: string | null = null;
 /**
  * The secret an agent session's server requires (see `sessionToken` in
- * collabServer.ts), the remote end of its SSH tunnel, and the one command
- * "Open in Terminal" may run: always the last one built here, never a string
- * handed over by a renderer.
+ * collabServer.ts), and the public link a remote agent reaches it through
+ * (remoteTunnel.ts), which lives exactly as long as the session.
  */
 let collabSessionToken: string | null = null;
-let remoteAgentPort: number | null = null;
-let remoteAgentLaunch: string | null = null;
+let remoteTunnel: QuickTunnel | null = null;
+
+function closeRemoteTunnel(): void {
+  const tunnel = remoteTunnel;
+  remoteTunnel = null;
+  tunnel?.close();
+}
 
 localAgents.subscribe((state, participantId) => {
   if (participantId !== desktopAgentParticipantId) return;
@@ -302,8 +299,6 @@ function endBackgroundAgentSession(): Promise<void> {
     collabMode = null;
     collabOwner = null;
     collabSessionToken = null;
-    remoteAgentPort = null;
-    remoteAgentLaunch = null;
     try {
       closing?.notifyEnded();
       // Let WebSocket queue the terminal frame before close() terminates peers.
@@ -312,6 +307,8 @@ function endBackgroundAgentSession(): Promise<void> {
     } catch (error) {
       console.error('Could not close background collaboration session cleanly:', error);
     }
+    // The remote agent heard "ended" through the link; now take the link down.
+    closeRemoteTunnel();
     if (quitting || !owner || !owner.session || owner.editor.isDestroyed()) return;
     try {
       owner.session.deck = await loadDeck(owner.session.dir);
@@ -657,6 +654,8 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   quitting = true;
+  // No way in once DeckWerk is going away.
+  closeRemoteTunnel();
   for (const state of editorStates()) void state.agentRuntime.close();
   localAgents.close();
   void collabServer?.close();
@@ -1428,68 +1427,41 @@ function registerHandlers(): void {
   });
 
   /**
-   * Collaborate → Remote agent: host this deck as an agent session and build
-   * the one command that connects an agent on another machine to it (see
-   * remoteAgent.ts). The renderer shows the command; it never supplies one.
+   * Collaborate → Remote agent → Connect: host this deck as a token-locked
+   * agent session, open a public link to it for as long as it runs, and hand
+   * back the one line to paste on the agent's machine (connectScript.ts).
    */
-  ipcMain.handle(
-    IPC.remoteAgentStart,
-    async (event, setup: RemoteAgentSetup): Promise<RemoteAgentStart> => {
-      const host = (setup?.host ?? '').trim();
-      if (!isSshDestination(host)) {
-        throw new Error('Enter the SSH host you log in to: an alias from ~/.ssh/config, or user@host.');
-      }
-      const s = requireSession(event);
-      const connection = await startBackgroundSession(event, 'agent', { copyLink: false });
-      if (!collabServer || !collabSessionToken || !desktopAgentParticipantId) {
-        throw new Error('The agent session did not start');
-      }
-      remoteAgentPort ??= pickRemotePort();
-      const folder = (setup.folder ?? '').trim() || defaultRemoteFolder(basename(s.dir));
-      const command = remoteAgentCommand({
-        host,
-        folder,
-        setup: setup.setup,
-        agent: setup.agent ?? 'claude',
-        localPort: collabServer.port,
-        remotePort: remoteAgentPort,
-        deckId: basename(s.dir),
-        participantId: desktopAgentParticipantId,
-        token: collabSessionToken,
-        name: `Agent on ${host}`,
+  ipcMain.handle(IPC.remoteAgentConnect, async (event): Promise<RemoteAgentLink> => {
+    requireSession(event);
+    const cloudflared = findCloudflared();
+    if (!cloudflared) {
+      throw new Error("DeckWerk opens the link with Cloudflare's free tunnel tool. "
+        + 'Install it once with: brew install cloudflared');
+    }
+    const connection = await startBackgroundSession(event, 'agent', { copyLink: false });
+    if (!collabServer || !collabSessionToken || !desktopAgentParticipantId) {
+      throw new Error('The agent session did not start');
+    }
+    if (!remoteTunnel) {
+      const tunnel = await openQuickTunnel(collabServer.port, { cloudflared });
+      remoteTunnel = tunnel;
+      void tunnel.exited.then(() => {
+        // Closed on purpose, or replaced: nothing to do.
+        if (remoteTunnel !== tunnel) return;
+        // The link died under the session; without it the session is moot.
+        remoteTunnel = null;
+        void endBackgroundAgentSession();
       });
-      remoteAgentLaunch = command;
-      return { connection, command, folder, host };
-    },
-  );
-
-  /** Run the last remote-agent command in a new Terminal window. */
-  ipcMain.handle(IPC.remoteAgentOpenTerminal, async (): Promise<void> => {
-    const command = remoteAgentLaunch;
-    if (!command) throw new Error('Start the remote agent session first');
-    // A .command file opens in Terminal with no automation permission. It
-    // holds the session token, so it lives in a private folder, briefly.
-    const dir = await mkdtemp(join(app.getPath('temp'), 'deckwerk-agent-'));
-    const file = join(dir, 'Connect DeckWerk agent.command');
-    await writeFile(file, [
-      '#!/bin/bash',
-      '# DeckWerk: connects a remote agent to the deck open in DeckWerk.',
-      '# Closing this window disconnects it; DeckWerk keeps everything it made.',
-      `exec ${command}`,
-      '',
-    ].join('\n'), { mode: 0o700 });
-    const failure = await shell.openPath(file);
-    setTimeout(() => void rm(dir, { recursive: true, force: true }), 60_000);
-    if (failure) throw new Error(failure);
+    }
+    const handshake = new URL('/connect.sh', remoteTunnel.url);
+    handshake.searchParams.set('token', collabSessionToken);
+    handshake.searchParams.set('agent', desktopAgentParticipantId);
+    return { connection, line: `curl -fsSL '${handshake.href}' | bash`, url: remoteTunnel.url };
   });
 
-  /** Host aliases from ~/.ssh/config, to suggest in the Remote agent form. */
-  ipcMain.handle(IPC.sshHosts, async (): Promise<string[]> => {
-    try {
-      return sshConfigHosts(await readFile(join(homedir(), '.ssh', 'config'), 'utf8'));
-    } catch {
-      return [];
-    }
+  ipcMain.handle(IPC.remoteAgentDisconnect, async (): Promise<void> => {
+    await endBackgroundAgentSession();
+    closeRemoteTunnel();
   });
 
   // Keep the native editor in place. Replacing it with a second BrowserWindow
