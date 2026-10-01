@@ -77,6 +77,8 @@ export interface SessionTarget {
   deckId: string;
   participantId: string;
   wsUrl: string;
+  /** The session's secret, when the host requires one (a remote-agent session). */
+  token: string | null;
 }
 
 /** Take a `?deck=…&agent=…` session URL apart; the browser panel prints one. */
@@ -98,11 +100,35 @@ export function parseSessionUrl(raw: string): SessionTarget {
   if (!participantId || !/^[a-zA-Z0-9_-]{8,80}$/.test(participantId)) {
     throw new Error('The session URL carries no participant id. Copy the command from the Agent panel in your browser.');
   }
+  const token = url.searchParams.get('token');
   const ws = new URL(url.origin);
   ws.protocol = ws.protocol === 'https:' ? 'wss:' : 'ws:';
   ws.pathname = '/ws';
   ws.searchParams.set('deck', deckId);
-  return { origin: url.origin, deckId, participantId, wsUrl: ws.href };
+  if (token) ws.searchParams.set('token', token);
+  return { origin: url.origin, deckId, participantId, wsUrl: ws.href, token };
+}
+
+/**
+ * A desktop-hosted remote-agent session reaches the agent's machine through an
+ * SSH tunnel on a port picked per session, so the same deck arrives from a
+ * different loopback origin each time. That is still the same session as far
+ * as the mirror is concerned; a different host or deck is not.
+ */
+export function sameMirrorSession(
+  previous: { origin?: string; deckId?: string },
+  target: Pick<SessionTarget, 'origin' | 'deckId'>,
+): boolean {
+  if (previous.deckId !== target.deckId) return false;
+  if (previous.origin === target.origin) return true;
+  const loopback = (origin: string | undefined) => {
+    try {
+      return ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(origin ?? '').hostname);
+    } catch {
+      return false;
+    }
+  };
+  return loopback(previous.origin) && loopback(target.origin);
 }
 
 /** Where a session is mirrored unless the person says otherwise. */
@@ -235,6 +261,7 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
     const url = new URL(path, target.origin);
     url.searchParams.set('deck', target.deckId);
     url.searchParams.set('agentSession', target.participantId);
+    if (target.token) url.searchParams.set('token', target.token);
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
     return url.href;
   };
@@ -250,7 +277,7 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
     }
     if (existsSync(marker)) {
       const previous = JSON.parse(await readFile(marker, 'utf8')) as { origin?: string; deckId?: string };
-      if (previous.origin !== target.origin || previous.deckId !== target.deckId) {
+      if (!sameMirrorSession(previous, target)) {
         throw new Error(`${dir} mirrors ${previous.origin}/?deck=${previous.deckId}, not this session. `
           + 'Choose another folder with --dir.');
       }
@@ -263,8 +290,12 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
       origin: target.origin,
       deckId: target.deckId,
       participantId: target.participantId,
+      ...(target.token ? { token: target.token } : {}),
       connectedAt: new Date().toISOString(),
     });
+    // The marker can hold the session's secret, and the folder may sit in a
+    // home directory other people on a shared machine can list.
+    if (target.token) await chmod(marker, 0o600);
     // The agent's command: generated, executable, always the server's version.
     const helper = join(dir, HELPER_FILE);
     await writeFile(helper, deckHelperSource, 'utf8');

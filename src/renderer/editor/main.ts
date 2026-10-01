@@ -20,6 +20,8 @@ import {
 } from '@shared/themes.js';
 import { AgentBridge, type HtmlSyncOutcome } from './agentBridge.js';
 import { AgentPanel } from './agentPanel.js';
+import { openCollaborateChooser } from './collaborateChooser.js';
+import { RemoteAgentPanel } from './remoteAgentPanel.js';
 import { createDeckWerkButton } from './aboutDialog.js';
 import { trackPreviewFrameRecovery } from '../player/previewFrameRecovery.js';
 import { EditorCanvas } from './canvas.js';
@@ -175,6 +177,8 @@ let agentSessionReady = false;
 let agentSessionWsUrl: string | null = null;
 let agentPresence: PresenceOverlay | null = null;
 let activeSessionMode: 'agent' | 'collaboration' | null = null;
+/** Whether the running agent session is the one Collaborate → Remote agent started. */
+let remoteAgentSession = false;
 let collaborateButton: HTMLButtonElement | null = null;
 const persistThemeCss = (css: string): Promise<void> | void => {
   if (agentSessionReady && agentSessionBridge) {
@@ -233,6 +237,27 @@ const agentPanel = new AgentPanel({
   currentDeckPath: () => store.get().dir,
   connectCommand: 'Open a presentation first',
   mode: 'local',
+});
+const remoteAgentPanel = new RemoteAgentPanel({
+  deckName: () => store.get().dir?.split(/[\\/]/).filter(Boolean).at(-1) ?? null,
+  api: {
+    start: async (setup) => {
+      // The session serves the deck from disk; give it the latest first.
+      await cssEditor.flush();
+      await save();
+      return window.api.startRemoteAgent(setup);
+    },
+    openTerminal: () => window.api.openRemoteAgentTerminal(),
+    end: () => window.api.endAgentSession(),
+    sshHosts: () => window.api.sshHosts(),
+    getState: () => window.api.getAgentPanelState(),
+    onState: (listener) => window.api.onAgentPanelState(listener),
+    onStarted: (started) => {
+      remoteAgentSession = true;
+      connectAgentSession(started.connection);
+      refreshCollaborationControl();
+    },
+  },
 });
 
 /**
@@ -590,6 +615,22 @@ async function toggleAgentPanel(): Promise<void> {
 }
 
 async function startSharing(): Promise<void> {
+  if (activeSessionMode === 'agent' && remoteAgentSession) {
+    remoteAgentPanel.toggle();
+    return;
+  }
+  // People's session in progress: the same button offers to end it.
+  if (activeSessionMode === 'collaboration') {
+    await inviteCollaborators();
+    return;
+  }
+  openCollaborateChooser(collaborateButton!, {
+    invite: () => void inviteCollaborators(),
+    remoteAgent: () => remoteAgentPanel.show(),
+  });
+}
+
+async function inviteCollaborators(): Promise<void> {
   try {
     if (activeSessionMode === 'collaboration') {
       openEndCollaborationPopover(collaborateButton!, () => {
@@ -677,8 +718,10 @@ el('canvas').addEventListener('mouseleave', clearCollaborationCursor);
 function refreshCollaborationControl(): void {
   if (!collaborateButton) return;
   const sharing = activeSessionMode === 'collaboration';
-  collaborateButton.textContent = sharing ? 'End collaboration' : 'Collaborate';
+  const agent = activeSessionMode === 'agent' && remoteAgentSession;
+  collaborateButton.textContent = sharing ? 'End collaboration' : agent ? 'Remote agent' : 'Collaborate';
   collaborateButton.classList.toggle('danger', sharing);
+  collaborateButton.classList.toggle('primary', agent);
 }
 
 function publishAgentPresence(): void {
@@ -771,6 +814,7 @@ function disconnectAgentSession(): void {
   agentSessionReady = false;
   agentSessionWsUrl = null;
   activeSessionMode = null;
+  remoteAgentSession = false;
   refreshCollaborationControl();
   pendingCollaborationCursor = undefined;
   if (collaborationCursorFrame) cancelAnimationFrame(collaborationCursorFrame);
@@ -1259,6 +1303,7 @@ window.api.onAgentSessionState?.((state) => {
   else {
     const endedMode = activeSessionMode;
     agentPanel.hide();
+    remoteAgentPanel.sessionEnded();
     disconnectAgentSession();
     setStatusMessage(endedMode === 'collaboration'
       ? 'Collaboration ended; presentation saved.'

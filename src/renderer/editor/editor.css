@@ -4493,3 +4493,103 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
   transform: translateX(-50%);
   pointer-events: none;
 }
+
+/* Collaborate → people or a remote agent (collaborateChooser.ts). */
+#collaborate-chooser {
+  position: fixed;
+  z-index: 11000;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-sizing: border-box;
+  width: min(300px, calc(100vw - 16px));
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 97%, transparent);
+  box-shadow: 0 14px 38px rgb(0 0 0 / 55%);
+}
+
+#collaborate-chooser .collaborate-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 9px 10px;
+  border-color: transparent;
+  border-radius: 7px;
+  background: transparent;
+  text-align: left;
+}
+
+#collaborate-chooser .collaborate-choice:hover:not(:disabled),
+#collaborate-chooser .collaborate-choice:focus-visible {
+  border-color: var(--line);
+  background: var(--panel-2);
+}
+
+#collaborate-chooser .collaborate-choice strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+#collaborate-chooser .collaborate-choice span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: normal;
+}
+
+/* Collaborate → Remote agent (remoteAgentPanel.ts), on the agent panel's frame. */
+.remote-agent-panel {
+  height: auto;
+  max-height: calc(100vh - 88px);
+  min-height: 0;
+}
+
+.remote-agent-panel .agent-chat-messages {
+  min-height: 120px;
+  max-height: 280px;
+}
+
+.remote-agent-form {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.remote-agent-form[hidden] { display: none; }
+
+.remote-agent-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.remote-agent-field input { width: 100%; }
+
+.remote-agent-start { align-self: flex-end; margin-top: 4px; }
+
+.remote-agent-buttons {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.remote-agent-hint {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* Connection notices are not failures here; only real errors stay red. */
+.remote-agent-panel .agent-chat-message-system:not(.error) .agent-chat-message-body {
+  border-color: var(--line);
+  color: var(--muted);
+}

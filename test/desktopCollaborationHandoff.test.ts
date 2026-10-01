@@ -202,6 +202,8 @@ describe.skipIf(!electronBinary || noWindowManager)('desktop collaboration hando
     }).then((session) => session.active)`);
     const collaborationStartedAt = Date.now();
     await editor.click('#collaborate-trigger', 'Collaborate');
+    // Collaborate offers people or a remote agent; this is the people one.
+    await editor.click('#collaborate-chooser .collaborate-choice-invite', 'Invite people');
 
     // Collaborate must not navigate, close, or replace the native editor.
     // Waiting on its changed toolbar state also measures application-level

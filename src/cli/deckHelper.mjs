@@ -84,10 +84,11 @@ function selection() {
 }
 
 function apiUrl(path, params = {}) {
-  const { origin, deckId, participantId } = session();
+  const { origin, deckId, participantId, token } = session();
   const url = new URL(path, origin);
   url.searchParams.set('deck', deckId);
   url.searchParams.set('agentSession', participantId);
+  if (token) url.searchParams.set('token', token);
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
   }

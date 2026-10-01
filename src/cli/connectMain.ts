@@ -41,6 +41,19 @@ if (!url || bad || (dir === undefined && args.includes('--dir')) || (agent === u
   process.exit(2);
 }
 
+// A remote-agent session's secret can arrive in the environment rather than in
+// the URL, which keeps it out of the process list on a shared machine.
+const envToken = process.env.DECKWERK_SESSION_TOKEN;
+if (envToken) {
+  try {
+    const withToken = new URL(url);
+    if (!withToken.searchParams.has('token')) withToken.searchParams.set('token', envToken);
+    url = withToken.href;
+  } catch {
+    // Not a URL: runConnectCommand reports that properly.
+  }
+}
+
 const io = {
   out: (text: string) => { process.stdout.write(text); },
   err: (text: string) => { process.stderr.write(text.endsWith('\n') ? text : `${text}\n`); },

@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { lookup } from 'node:dns/promises';
 import { createReadStream, existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { basename, dirname, extname, join, normalize, resolve } from 'node:path';
 import { isIP } from 'node:net';
@@ -208,6 +208,13 @@ export interface CollabServerOptions {
   hostedDeckId?: string;
   /** Show agent-specific onboarding for invite links created for an agent. */
   agentMode?: boolean;
+  /**
+   * A secret every request and socket must carry, as `?token=` or the
+   * `x-deckwerk-token` header. The desktop app sets one for a remote-agent
+   * session, whose port is forwarded onto a machine other people may share:
+   * there, loopback is not private, so reaching the port must not be enough.
+   */
+  sessionToken?: string;
   /** Optional evaluation-only folder that receives every submitted HTML draft. */
   draftArchiveDir?: string;
   /** Publish the newest HTML compile to the filesystem agent scratchpad. */
@@ -256,6 +263,18 @@ export interface RunningCollabServer {
   /** Tell connected peers this was an intentional host end, not a network loss. */
   notifyEnded: () => void;
   close: () => Promise<void>;
+}
+
+/** Whether a request may reach a session that requires `sessionToken` (none: all may). */
+export function carriesSessionToken(request: IncomingMessage, sessionToken: string | undefined): boolean {
+  if (!sessionToken) return true;
+  const url = new URL(request.url ?? '/', 'http://localhost');
+  const header = request.headers['x-deckwerk-token'];
+  const given = url.searchParams.get('token') ?? (Array.isArray(header) ? header[0] : header);
+  if (!given) return false;
+  const expected = Buffer.from(sessionToken);
+  const actual = Buffer.from(given);
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
 export async function startCollabServer(options: CollabServerOptions): Promise<RunningCollabServer> {
@@ -703,6 +722,11 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
   let unsubscribeSharedAgent: (() => void) | undefined;
 
   const httpServer = createServer((request, response) => {
+    if (!carriesSessionToken(request, options.sessionToken)) {
+      response.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
+      response.end('This DeckWerk session only answers requests that carry its token.');
+      return;
+    }
     void handleHttp(request, response).catch((error) => {
       if (!response.headersSent) response.writeHead(500, { 'content-type': 'text/plain' });
       response.end(`server error: ${String(error)}`);
@@ -2691,7 +2715,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
   const wss = new WebSocketServer({ noServer: true });
   httpServer.on('upgrade', (request, socket, head) => {
     const url = new URL(request.url ?? '/', 'http://localhost');
-    if (url.pathname !== '/ws') {
+    if (url.pathname !== '/ws' || !carriesSessionToken(request, options.sessionToken)) {
       socket.destroy();
       return;
     }

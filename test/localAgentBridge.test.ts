@@ -200,6 +200,7 @@ describe('slide-agent connect', { timeout: 120_000 }, () => {
       deckId: 'weekly',
       participantId: 'participant-abc12345',
       wsUrl: 'wss://deck.example.ts.net/ws?deck=weekly',
+      token: null,
     });
     expect(() => parseSessionUrl('https://deck.example.ts.net/?deck=weekly')).toThrow(/participant/);
     expect(() => parseSessionUrl('ftp://x/?deck=a&agent=participant-abc12345')).toThrow(/http/);
