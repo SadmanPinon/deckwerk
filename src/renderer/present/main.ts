@@ -8,6 +8,7 @@ import {
   type PresentationRange,
 } from '@shared/presentationRange.js';
 import { AnnotationLayer } from '../player/annotationLayer.js';
+import { AnnotationToolbar } from '../player/annotationToolbar.js';
 import { bindPresentKeys } from '../player/keys.js';
 import { Player } from '../player/player.js';
 import { eventOnInteractiveWeb, slideLinkFromEvent } from '../player/links.js';
@@ -25,6 +26,7 @@ if (!root) throw new Error('missing #root');
 
 let player: Player | null = null;
 let annotations: AnnotationLayer | null = null;
+let toolbar: AnnotationToolbar | null = null;
 let session: DeckSession | null = null;
 let range: PresentationRange | null = null;
 let themeLink: HTMLStyleElement | null = null;
@@ -81,7 +83,9 @@ function start(nextSession: DeckSession): void {
     host: root!,
     canvas: nextSession.deck.canvas,
     onCommand: (command) => window.api.sendPresentAnnotation(command),
+    onToolChange: (tool) => toolbar?.reflect(tool),
   });
+  toolbar = new AnnotationToolbar({ parent: document.body, layer: annotations });
   // Presenting from a skipped slide would put it on the projector anyway;
   // land on the nearest slide that is actually part of the talk.
   let first = Number.isFinite(startSlide) ? startSlide : 0;

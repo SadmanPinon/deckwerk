@@ -12,6 +12,7 @@ import {
 import { emptyDeck, parseDeck, type Deck } from '../src/shared/deck.js';
 import type { PresentationCommand } from '../src/shared/ipc.js';
 import { AnnotationLayer } from '../src/renderer/player/annotationLayer.js';
+import { AnnotationToolbar } from '../src/renderer/player/annotationToolbar.js';
 import { bindPresentKeys } from '../src/renderer/player/keys.js';
 import type { Player } from '../src/renderer/player/player.js';
 import { createSpeakerView } from '../src/renderer/presenter/speakerView.js';
@@ -474,5 +475,145 @@ describe('speaker view annotation tools', () => {
     expect(host.querySelector('.speaker-tools')).toBeNull();
     expect(host.querySelector('.annotation-layer')).toBeNull();
     view.destroy();
+  });
+});
+
+describe('annotation toolbar', () => {
+  let layer: AnnotationLayer;
+  let toolbar: AnnotationToolbar;
+
+  const move = (x: number, y: number, buttons = 0) =>
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: x, clientY: y, buttons, bubbles: true }));
+  const button = (action: string) =>
+    toolbar.element.querySelector<HTMLButtonElement>(`[data-action="${action}"]`)!;
+
+  beforeEach(() => {
+    document.body.replaceChildren();
+    document.body.className = '';
+    vi.useFakeTimers();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+    layer = new AnnotationLayer({
+      host: hostOf(),
+      canvas: { w: 1920, h: 1080 },
+      onToolChange: (tool) => toolbar?.reflect(tool),
+      requestFrame: () => 0,
+      cancelFrame: () => {},
+    });
+    toolbar = new AnnotationToolbar({ parent: document.body, layer, idleMs: 2_000 });
+    // Laid out in the bottom-left corner of a 1600×900 window.
+    toolbar.element.getBoundingClientRect = () => ({
+      x: 16, y: 828, left: 16, top: 828, width: 260, height: 56, right: 276, bottom: 884, toJSON: () => ({}),
+    });
+  });
+
+  afterEach(() => {
+    toolbar.destroy();
+    layer.destroy();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('offers every tool with its key, hidden until the pointer moves', () => {
+    const actions = [...toolbar.element.querySelectorAll<HTMLButtonElement>('.annotation-tool')]
+      .map((node) => node.dataset.action);
+    expect(actions).toEqual(['pen', 'laser', 'trail', 'undo', 'clear']);
+    expect(button('pen').querySelector('kbd')!.textContent).toBe('P');
+    expect(button('laser').querySelector('kbd')!.textContent).toBe('L');
+    expect(button('trail').querySelector('kbd')!.textContent).toBe('T');
+    expect(button('clear').querySelector('kbd')!.textContent).toBe('E');
+    // Buttons never take focus, so Space and Enter keep advancing the slides.
+    expect(button('pen').tabIndex).toBe(-1);
+    expect(toolbar.isVisible()).toBe(false);
+  });
+
+  it('comes up with the pointer when no tool is picked, then fades once it rests', () => {
+    move(900, 300);
+    expect(toolbar.isVisible()).toBe(true);
+    expect(document.body.classList.contains('annotation-controls-visible')).toBe(true);
+    vi.advanceTimersByTime(1_900);
+    move(905, 302);
+    vi.advanceTimersByTime(1_900);
+    expect(toolbar.isVisible()).toBe(true);
+    vi.advanceTimersByTime(200);
+    expect(toolbar.isVisible()).toBe(false);
+    expect(document.body.classList.contains('annotation-controls-visible')).toBe(false);
+  });
+
+  it('picks, shows and puts down a tool from its button', () => {
+    button('pen').click();
+    expect(layer.getTool()).toBe('pen');
+    expect(button('pen').getAttribute('aria-pressed')).toBe('true');
+    button('trail').click();
+    expect(layer.getTool()).toBe('trail');
+    expect(button('pen').getAttribute('aria-pressed')).toBe('false');
+    button('trail').click();
+    expect(layer.getTool()).toBeNull();
+    // A key picks it just the same, and the buttons follow.
+    layer.handleKey(new KeyboardEvent('keydown', { key: 'l', cancelable: true }));
+    expect(button('laser').getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('never lets a press on the toolbar reach the slide', () => {
+    const onWindowClick = vi.fn();
+    const onWindowMouseDown = vi.fn();
+    window.addEventListener('click', onWindowClick);
+    window.addEventListener('mousedown', onWindowMouseDown);
+    button('laser').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    button('laser').click();
+    window.removeEventListener('click', onWindowClick);
+    window.removeEventListener('mousedown', onWindowMouseDown);
+    expect(onWindowClick).not.toHaveBeenCalled();
+    expect(onWindowMouseDown).not.toHaveBeenCalled();
+    expect(layer.getTool()).toBe('laser');
+  });
+
+  it('stays out of the way while a tool is in use, except in its corner', () => {
+    layer.setTool('laser');
+    move(900, 300);
+    expect(toolbar.isVisible()).toBe(false);
+    move(200, 760);
+    expect(toolbar.isVisible()).toBe(true);
+  });
+
+  it('is not summoned by a stroke in progress', () => {
+    move(900, 300, 1);
+    expect(toolbar.isVisible()).toBe(false);
+  });
+
+  it('stays up while the pointer is on it', () => {
+    move(100, 850);
+    toolbar.element.dispatchEvent(new MouseEvent('pointerenter'));
+    vi.advanceTimersByTime(10_000);
+    expect(toolbar.isVisible()).toBe(true);
+    toolbar.element.dispatchEvent(new MouseEvent('pointerleave'));
+    vi.advanceTimersByTime(2_000);
+    expect(toolbar.isVisible()).toBe(false);
+  });
+
+  it('undoes and clears the ink of the slide on screen', () => {
+    const host = hostOf();
+    const drawn = new AnnotationLayer({
+      host, canvas: { w: 1920, h: 1080 }, requestFrame: () => 0, cancelFrame: () => {},
+    });
+    const bar = new AnnotationToolbar({ parent: document.body, layer: drawn });
+    drawn.setSlide('s1');
+    drawn.setTool('pen');
+    for (const x of [100, 200]) {
+      host.dispatchEvent(pointer('pointerdown', x, 100));
+      host.dispatchEvent(pointer('pointerup', x, 100));
+    }
+    bar.element.querySelector<HTMLButtonElement>('[data-action="undo"]')!.click();
+    expect(drawn.inkFor()).toHaveLength(1);
+    bar.element.querySelector<HTMLButtonElement>('[data-action="clear"]')!.click();
+    expect(drawn.inkFor()).toEqual([]);
+    bar.destroy();
+    drawn.destroy();
+  });
+
+  it('takes itself and the pointer class away when destroyed', () => {
+    move(900, 300);
+    toolbar.destroy();
+    expect(document.querySelector('.annotation-toolbar')).toBeNull();
+    expect(document.body.classList.contains('annotation-controls-visible')).toBe(false);
   });
 });

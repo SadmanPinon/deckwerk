@@ -50,6 +50,90 @@
   cursor: none !important;
 }
 
+/* The on-screen tool buttons (annotationToolbar.ts): invisible until the
+   pointer moves, so a talk driven from the keyboard or a clicker never shows
+   them. Styled here rather than from the app chrome because the exported
+   bundle and the presentation window load nothing else. */
+.annotation-toolbar {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 5px;
+  border-radius: 12px;
+  background: rgb(18 18 22 / 80%);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 35%), 0 0 0 1px rgb(255 255 255 / 9%);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  color: #ececf1;
+  font: 600 9px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.annotation-toolbar.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.annotation-toolbar .annotation-tool {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.annotation-toolbar .annotation-tool:hover {
+  border-color: transparent;
+  background: rgb(255 255 255 / 11%);
+}
+
+.annotation-toolbar .annotation-tool[aria-pressed="true"] {
+  border-color: rgb(255 72 72 / 85%);
+  background: rgb(255 40 40 / 22%);
+  color: #ff5c5c;
+}
+
+.annotation-toolbar .annotation-tool svg {
+  width: 22px;
+  height: 22px;
+}
+
+.annotation-toolbar .annotation-tool kbd {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  font: inherit;
+  opacity: .6;
+}
+
+.annotation-toolbar-divider {
+  width: 1px;
+  height: 26px;
+  margin: 0 4px;
+  background: rgb(255 255 255 / 16%);
+}
+
+/* The presentation window hides the pointer; bring it back with the controls. */
+body.annotation-controls-visible {
+  cursor: default;
+}
+
 .slide {
   position: absolute;
   inset: 0;

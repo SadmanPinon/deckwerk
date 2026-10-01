@@ -2,6 +2,7 @@ import '../player/player.css';
 import { annotationSlideKey } from '@shared/annotations.js';
 import { parseDeck } from '@shared/deck.js';
 import { AnnotationLayer } from '../player/annotationLayer.js';
+import { AnnotationToolbar } from '../player/annotationToolbar.js';
 import { bindPresentKeys } from '../player/keys.js';
 import { Player } from '../player/player.js';
 import { eventOnInteractiveWeb, slideLinkFromEvent } from '../player/links.js';
@@ -45,8 +46,14 @@ function boot(): void {
   });
   window.__SLIDE_PLAYER__ = player;
   // The same pen and lasers as the app. One surface here, so nothing to mirror.
-  annotations = new AnnotationLayer({ host: root, canvas: deck.canvas });
+  let toolbar: AnnotationToolbar | null = null;
+  annotations = new AnnotationLayer({
+    host: root,
+    canvas: deck.canvas,
+    onToolChange: (tool) => toolbar?.reflect(tool),
+  });
   annotations.setSlide(annotationSlideKey(deck.slides, player.getCursor().slide));
+  toolbar = new AnnotationToolbar({ parent: document.body, layer: annotations });
 
   bindPresentKeys(window, player, {
     intercept: (event) => annotations?.handleKey(event) ?? false,

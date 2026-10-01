@@ -6,6 +6,7 @@ import { annotationSlideKey, type AnnotationCommand } from '../../src/shared/ann
 import { parseDeck } from '../../src/shared/deck.js';
 import type { PresentationCommand } from '../../src/shared/ipc.js';
 import { AnnotationLayer } from '../../src/renderer/player/annotationLayer.js';
+import { AnnotationToolbar } from '../../src/renderer/player/annotationToolbar.js';
 import { bindPresentKeys } from '../../src/renderer/player/keys.js';
 import { Player } from '../../src/renderer/player/player.js';
 import { createSpeakerView, type SpeakerView } from '../../src/renderer/presenter/speakerView.js';
@@ -45,11 +46,14 @@ const player = new Player({
   },
   onBlank: (blanked) => audience?.setHidden(blanked),
 });
+let toolbar: AnnotationToolbar | null = null;
 audience = new AnnotationLayer({
   host: audienceHost,
   canvas: deck.canvas,
   onCommand: relay('audience', (command) => speaker?.annotate(command)),
+  onToolChange: (tool) => toolbar?.reflect(tool),
 });
+toolbar = new AnnotationToolbar({ parent: audienceHost, layer: audience });
 
 const run = (command: PresentationCommand) => {
   if (command.type === 'next') player.next();
@@ -72,4 +76,4 @@ audienceHost.addEventListener('click', () => {
   if (!audience?.capturesPointer()) player.next();
 });
 
-Object.assign(window, { player, audience, speaker, annotationLog: log });
+Object.assign(window, { player, audience, speaker, toolbar, annotationLog: log });

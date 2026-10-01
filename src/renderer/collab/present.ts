@@ -13,6 +13,7 @@ import {
 } from '@shared/presentationRange.js';
 import type { Cursor } from '@shared/timeline.js';
 import { AnnotationLayer } from '../player/annotationLayer.js';
+import { AnnotationToolbar } from '../player/annotationToolbar.js';
 import { Player } from '../player/player.js';
 import { bindPresentKeys } from '../player/keys.js';
 import { bindSpeakerKeys, createSpeakerView, type SpeakerView } from '../presenter/speakerView.js';
@@ -124,6 +125,7 @@ let deck: Deck | null = null;
 let themeCss = '';
 let player: Player | null = null;
 let annotations: AnnotationLayer | null = null;
+let toolbar: AnnotationToolbar | null = null;
 let speaker: SpeakerView | null = null;
 let unbindAudienceKeys: (() => void) | null = null;
 let unbindSpeakerKeys: (() => void) | null = null;
@@ -261,7 +263,9 @@ function mountAudience(): void {
       host: stageHost,
       canvas: deck.canvas,
       onCommand: (command) => bus?.post({ kind: 'annotation', command }),
+      onToolChange: (tool) => toolbar?.reflect(tool),
     });
+    toolbar = new AnnotationToolbar({ parent: document.body, layer: annotations });
   }
   player.goTo({ slide: firstUnskipped(deck.slides, openAt.slide), step: openAt.step });
   readiness.painting();
@@ -287,6 +291,8 @@ function mountAudience(): void {
 function unmountAudience(): void {
   unbindAudienceKeys?.();
   unbindAudienceKeys = null;
+  toolbar?.destroy();
+  toolbar = null;
   annotations?.destroy();
   annotations = null;
   player?.destroy();
