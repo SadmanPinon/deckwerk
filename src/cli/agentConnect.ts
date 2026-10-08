@@ -120,10 +120,14 @@ export function parseSessionUrl(raw: string): SessionTarget {
 }
 
 /**
- * A desktop-hosted remote-agent session reaches the agent's machine through an
- * SSH tunnel on a port picked per session, so the same deck arrives from a
- * different loopback origin each time. That is still the same session as far
- * as the mirror is concerned; a different host or deck is not.
+ * Whether a folder mirrored from `previous` may be reused for `target`.
+ *
+ * A desktop-hosted remote-agent session is reached through a transport made
+ * fresh for each connection: a Cloudflare quick tunnel with a new address
+ * every time, or an SSH tunnel on a port picked per session. Reconnecting to
+ * the same deck that way is the same session as far as the mirror is
+ * concerned, and the folder is brought up to date in place. A fixed address
+ * that changed, or a different deck, is not.
  */
 export function sameMirrorSession(
   previous: { origin?: string; deckId?: string },
@@ -131,14 +135,15 @@ export function sameMirrorSession(
 ): boolean {
   if (previous.deckId !== target.deckId) return false;
   if (previous.origin === target.origin) return true;
-  const loopback = (origin: string | undefined) => {
+  const ephemeral = (origin: string | undefined) => {
     try {
-      return ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(origin ?? '').hostname);
+      const host = new URL(origin ?? '').hostname;
+      return ['127.0.0.1', 'localhost', '[::1]'].includes(host) || host.endsWith('.trycloudflare.com');
     } catch {
       return false;
     }
   };
-  return loopback(previous.origin) && loopback(target.origin);
+  return ephemeral(previous.origin) && ephemeral(target.origin);
 }
 
 /** Where a session is mirrored unless the person says otherwise. */

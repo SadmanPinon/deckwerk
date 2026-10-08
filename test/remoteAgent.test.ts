@@ -172,6 +172,11 @@ describe('bridge session URL', () => {
     expect(sameMirrorSession(previous, { origin: 'http://127.0.0.1:52000', deckId: 'other' })).toBe(false);
     expect(sameMirrorSession({ origin: 'http://lab:5800', deckId: 'talk' },
       { origin: 'http://other:5800', deckId: 'talk' })).toBe(false);
+    // Every Connect makes a new quick-tunnel address for the same deck.
+    expect(sameMirrorSession({ origin: 'https://clone-approx-usgs-pine.trycloudflare.com', deckId: 'Fall26' },
+      { origin: 'https://malpractice-modern-promote-cad.trycloudflare.com', deckId: 'Fall26' })).toBe(true);
+    expect(sameMirrorSession({ origin: 'https://clone-approx-usgs-pine.trycloudflare.com', deckId: 'Fall26' },
+      { origin: 'https://malpractice-modern-promote-cad.trycloudflare.com', deckId: 'Spring27' })).toBe(false);
   });
 });
 
