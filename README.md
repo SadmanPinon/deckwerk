@@ -1,5 +1,75 @@
 # DeckWerk
 
+> **This is a fork.** [DeckWerk](https://github.com/vsitzmann/deckwerk) is created and maintained by
+> [Vincent Sitzmann](https://github.com/vsitzmann) and its contributors. All credit for DeckWerk itself
+> goes to them. This fork, by [Sadman Pinon](https://github.com/SadmanPinon), adds a few features on top
+> for presenting research and working with a coding agent on a remote server. It keeps the original MIT
+> license and copyright notice. The original README follows the fork notes below.
+
+## What this fork adds
+
+**Presenter annotations.** While presenting: a red pen, a laser dot that replaces the pointer, and a laser
+trail that stays lit while you hold the button and fades about 1.5 s after you let go (like GoodNotes).
+
+| Key | Tool |
+| --- | --- |
+| P or 1 | Pen. Ink stays on its slide for the rest of the show. |
+| L or 2 | Laser dot. Clicking still advances. |
+| T or 3 | Laser trail. Strokes written in quick succession stay lit together. |
+| E | Clear this slide's ink |
+| Cmd/Ctrl+Z | Undo the last pen stroke |
+| Esc | Put the tool down (a second Esc ends the show) |
+
+The same tools are on an on-screen toolbar in the bottom-left corner, which appears when you move the mouse
+and fades when it rests, and on Pen / Laser / Trail / Clear ink buttons in Speaker View. Drawing on Speaker
+View's current-slide preview shows up on the projector. Annotations never touch the deck file or History.
+They also work in the browser presenter and in web exports.
+
+**Remote agent.** Let Claude Code (or any terminal agent) on a lab server or cluster edit your deck live,
+while you watch and edit in the desktop app.
+
+1. Collaborate → Remote agent → Connect.
+2. In a terminal on the server, go to where the deck should live and paste the one line DeckWerk shows.
+   It creates (or updates) a folder named after the deck, keeps it in sync in the background, and returns
+   the prompt.
+3. Run `claude` in that folder. The light turns green; each save appears in the editor in about half a
+   second.
+
+Disconnect, closing the window, or quitting DeckWerk closes the connection, and the server side stops by
+itself. The server connects out to a temporary Cloudflare quick-tunnel link that exists only while the
+session runs and is locked with a one-time key; traffic passes through Cloudflare. Needs
+[`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
+on the Mac (`brew install cloudflared`) and Node 20 or newer on the server (the pasted line tries
+`module load nodejs` on clusters).
+
+**Smaller changes.** A native arm64 `ffprobe` on Apple silicon (the upstream package's "arm64" binary is
+x86_64, which macOS 27 flags because Rosetta is going away), agent edits applied before the overflow check,
+and a fix for the agent bridge never reconnecting after a dropped connection on recent Node versions.
+
+### Building this fork
+
+There is no signed release; build it for your own machine (Node 22+, Python 3.10+):
+
+```bash
+git clone https://github.com/SadmanPinon/deckwerk.git
+cd deckwerk
+npm ci
+npm run dist
+```
+
+The app lands in `release/`. On macOS, build outside an iCloud-synced folder (file-provider metadata breaks
+code signing), and if you installed the official app with Homebrew, `brew uninstall --cask deckwerk` first so
+an upgrade does not replace this build.
+
+### Known issues
+
+- After Disconnect and Connect again in the same app run, the status light can stay amber even though the
+  agent is connected and edits sync.
+- Based on upstream DeckWerk as of 0.2.2; upstream has moved on since.
+
+---
+
+
 **DeckWerk is an opinionated cross-platform what-you-see-is-what-you-get slide editor by Vincent Sitzmann.**
 
 *Deck* as in slide deck, and *Werk* as in the German word that means "a work (of art, literature, etc)", a factory, or a structure.
